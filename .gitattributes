@@ -1,0 +1,14 @@
+# Deterministic line endings: every checkout (CI runners, developer machines)
+# gets LF regardless of core.autocrlf, so FileInstall-embedded text assets and
+# the compiled executable hash identically for the same commit.
+* text=auto eol=lf
+
+*.png binary
+*.gif binary
+*.ico binary
+*.jpg binary
+*.cer binary
+*.pfx binary
+*.exe binary
+*.dll binary
+*.zip binary

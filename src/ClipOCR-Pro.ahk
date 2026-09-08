@@ -1,7 +1,18 @@
 #Requires AutoHotkey v2.0
-#SingleInstance Force
+; The default warning categories go to stdout (captured by build.ps1, which treats any warning as a
+; failure) instead of a dialog that would hang headless runs.
+#Warn VarUnset, StdOut
+#Warn Unreachable, StdOut
+; Single-instance enforcement happens in ReplacePreviousInstance() for interactive launches only,
+; so --health-check and --ocr-file never terminate a running tray instance.
+#SingleInstance Off
 ;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
-;@Ahk2Exe-SetVersion 1.5.0.0
+;@Ahk2Exe-SetVersion 1.6.0.0
+; CLI modes exit before any window or hotkey exists and must never show a dialog: this runs before
+; the includes and globals so an error anywhere in startup ends the process with a FAIL line.
+global CLI_MODE := (A_Args.Length > 0 && (A_Args[1] == "--health-check" || A_Args[1] == "--ocr-file")) ? A_Args[1] : ""
+if (CLI_MODE != "")
+    EnterCliMode()
 #Include Gdip_All.ahk
 #Include SuiteRegistry.ahk
 #Include OcrService.ahk
@@ -9,21 +20,151 @@
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
-global APP_VERSION := "1.5.0"
+global APP_VERSION := "1.6.0"
 global APP_ICON_PATH := A_IsCompiled ? A_ScriptFullPath : A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global APP_SOURCE_ICON_PATH := A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global GITHUB_RELEASES_URL := "https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases"
 global GITHUB_LATEST_RELEASE_API := "https://api.github.com/repos/KwangBeomPark/01_ClipOCR-Pro/releases/latest"
+; Translation popup font-size bounds, shared by dialog validation and settings normalization
+; (defined here because the health check probes them before the settings section runs).
+global TEXT_TRANSLATE_FONT_SIZE_MIN := 8
+global TEXT_TRANSLATE_FONT_SIZE_MAX := 18
+global TEXT_TRANSLATE_FONT_SIZE_DEFAULT := 10
 
 ; ── Global asset paths and initialization ──
 ; Keep app-owned temp files in a dedicated subfolder instead of the shared Temp root.
-global APP_TEMP_DIR := A_Temp "\ClipOCR-Pro"
+global APP_TEMP_DIR := GetAppTempDir()
 global bmcBtnPath := APP_TEMP_DIR "\bmc_btn.png"
 global githubIconPath := ""
 
+; Callable before the globals above exist (CLI error handlers run that early).
+GetAppTempDir() {
+    return A_Temp "\ClipOCR-Pro"
+}
+
 ; Headless build/CI check for version parsing, release-asset parsing, hashing, and quality settings.
-if (A_Args.Length > 0 && A_Args[1] == "--health-check")
+if (CLI_MODE == "--health-check")
     ExitApp(RunInternalHealthCheck())
+
+if (CLI_MODE == "") {
+    ReplacePreviousInstance()
+    ; Interactive mode keeps AutoHotkey's error dialog but also records the error for support.
+    OnError(LogUnhandledError)
+}
+
+; Appends "time version mode: message (file:line)" plus the call stack (file/line/function only, no
+; runtime values) to %TEMP%\ClipOCR-Pro\error.log, rolling the file over at 256 KB.
+LogUnhandledError(thrown, mode) {
+    global APP_TEMP_DIR, APP_VERSION
+    try {
+        if !DirExist(APP_TEMP_DIR)
+            DirCreate(APP_TEMP_DIR)
+        logPath := APP_TEMP_DIR "\error.log"
+        ; A failed rollover (previous log held open) must not cost the entry itself.
+        if (FileExist(logPath) && FileGetSize(logPath) > 256 * 1024)
+            try FileMove(logPath, logPath ".1", 1)
+        entry := FormatTime(, "yyyy-MM-dd HH:mm:ss") " v" APP_VERSION " " mode ": " DescribeThrown(thrown)
+        if (IsObject(thrown) && thrown.HasProp("Stack") && thrown.Stack != "")
+            entry .= "`n" RTrim(thrown.Stack, "`r`n")
+        FileAppend(entry "`n", logPath, "UTF-8")
+    }
+    return 0
+}
+
+EnterCliMode() {
+    OnError(HandleCliError)
+    ; Retitle the hidden main window so the title-based fallback in ReplacePreviousInstance() (kept
+    ; for instances of older builds) never matches this process.
+    DetectHiddenWindows(true)
+    try WinSetTitle("ClipOCR-Pro CLI " A_ScriptHwnd, "ahk_id " A_ScriptHwnd)
+    DetectHiddenWindows(false)
+}
+
+; "Message (File:Line)" for Error objects, the raw value otherwise.
+DescribeThrown(thrown) {
+    return IsObject(thrown) ? thrown.Message " (" thrown.File ":" thrown.Line ")" : String(thrown)
+}
+
+; Last-resort handler for CLI modes: report through the mode's own channel and exit 1 instead of
+; showing the error dialog that would hang a headless run.
+HandleCliError(thrown, mode) {
+    message := "unhandled error: " DescribeThrown(thrown)
+    if (CLI_MODE == "--health-check") {
+        try WriteHealthCheckLog([message])
+    } else {
+        try FileAppend("FAIL: " message "`n", "*")
+        try WriteOcrCliResult({ ok: false, engine: "", language: "", text: "", error: message })
+    }
+    ExitApp(1)
+}
+
+; Writes an --ocr-file result to CLIPOCR_OCR_OUTPUT as "OK|engine|language" + text or "ERROR|message".
+WriteOcrCliResult(result) {
+    output := result.ok ? "OK|" result.engine "|" result.language "`r`n" result.text : "ERROR|" result.error "`r`n"
+    outputPath := Trim(EnvGet("CLIPOCR_OCR_OUTPUT"))
+    if (outputPath != "") {
+        try FileDelete(outputPath)
+        FileAppend(output, outputPath, "UTF-8")
+    }
+}
+
+; Equivalent of #SingleInstance Force for interactive launches, run before any startup work so
+; teardown of the old instance overlaps with initialization. A named mutex serializes starters:
+; a concurrently launched instance pumps messages while it waits, so it honors the exit request
+; from the instance that won the mutex instead of both instances killing each other.
+ReplacePreviousInstance() {
+    static WAIT_OBJECT_0 := 0, WAIT_ABANDONED := 0x80, ID_FILE_EXIT := 65307, WM_COMMAND := 0x0111
+    static INTERACTIVE_PROP := "ClipOCR-Pro.Interactive"
+    mutex := DllCall("CreateMutexW", "Ptr", 0, "Int", false, "Str", "Local\ClipOCR-Pro.Startup", "Ptr")
+    acquired := false
+    deadline := A_TickCount + 5000
+    while (mutex && !acquired && A_TickCount < deadline) {
+        waitResult := DllCall("WaitForSingleObject", "Ptr", mutex, "UInt", 0, "UInt")
+        acquired := (waitResult == WAIT_OBJECT_0 || waitResult == WAIT_ABANDONED)
+        if !acquired
+            Sleep(50)
+    }
+    ; Mark this instance as interactive so later starters target it regardless of its window title.
+    DllCall("SetPropW", "Ptr", A_ScriptHwnd, "Str", INTERACTIVE_PROP, "Ptr", 1)
+    previousDetect := A_DetectHiddenWindows
+    DetectHiddenWindows(true)
+    try {
+        targets := []
+        for hwnd in WinGetList("ahk_class AutoHotkey") {
+            if (hwnd == A_ScriptHwnd)
+                continue
+            ; Only windows that carry the interactive marker are targets. The title match is a
+            ; deliberately permanent fallback for instances of builds that predate the marker running
+            ; from this exact path (users skip versions); it is anchored to AutoHotkey's own title
+            ; format so a different script whose path merely starts with ours is never matched, and
+            ; CLI processes of this build retitle their window so they never match either way.
+            title := ""
+            try title := WinGetTitle("ahk_id " hwnd)
+            legacyPrefix := A_ScriptFullPath " - AutoHotkey"
+            legacyTitle := (title = A_ScriptFullPath) || (SubStr(title, 1, StrLen(legacyPrefix)) = legacyPrefix)
+            if (!DllCall("GetPropW", "Ptr", hwnd, "Str", INTERACTIVE_PROP, "Ptr") && !legacyTitle)
+                continue
+            pid := 0
+            try pid := WinGetPID("ahk_id " hwnd)
+            try PostMessage(WM_COMMAND, ID_FILE_EXIT, 0, , "ahk_id " hwnd)
+            targets.Push({ hwnd: hwnd, pid: pid })
+        }
+        ; One shared deadline for every stale instance. Whatever is still alive afterwards is stuck
+        ; in a blocking call and is ended rather than left running with the same hotkeys and tray icon.
+        waitDeadline := A_TickCount + 5000
+        for _, target in targets {
+            remaining := Max(0, waitDeadline - A_TickCount) / 1000
+            if (!WinWaitClose("ahk_id " target.hwnd, , remaining) && target.pid)
+                try ProcessClose(target.pid)
+        }
+    } finally {
+        DetectHiddenWindows(previousDetect)
+        if acquired
+            DllCall("ReleaseMutex", "Ptr", mutex)
+        if mutex
+            DllCall("CloseHandle", "Ptr", mutex)
+    }
+}
 
 ; Use the bundled GitHub icon asset instead of downloading one at runtime.
 githubIconPath := PrepareBundledGithubIcon()
@@ -103,7 +244,7 @@ global SAVE_IMAGE_FORMAT := "png" ; Ctrl+S output format: jpg or png
 global JPG_QUALITY := 90 ; Ctrl+S JPG save and size-estimate quality
 global TEXT_TRANSLATE_LANG := "ko"
 global TEXT_TRANSLATE_HOTKEY := "#CapsLock"
-global TEXT_TRANSLATE_FONT_SIZE := 10
+global TEXT_TRANSLATE_FONT_SIZE := TEXT_TRANSLATE_FONT_SIZE_DEFAULT
 global IMAGE_TRANSLATE_LANGS := "ko,en,pl"
 global MANUAL_LANG := GetDefaultUILang() ; Also used as the general UI language for core tooltips
 global TRANSLATE_CONSENT := false ; One-time consent before sending data to external translation services
@@ -234,24 +375,21 @@ suiteOcrLanguagesFound := false
 suiteOcrLanguages := ""
 if !localOcrLanguagesFound
     suiteOcrLanguagesFound := Suite_TryGetAppSetting("ClipOCR", "OcrLanguages", &suiteOcrLanguages)
-OCR_LANGUAGES := NormalizeOcrLanguages(localOcrLanguagesFound ? localOcrLanguages
-    : (suiteOcrLanguagesFound ? suiteOcrLanguages : "ko-KR,en-US"))
+OCR_LANGUAGES := ResolveOcrLanguages(localOcrLanguagesFound ? localOcrLanguages
+    : (suiteOcrLanguagesFound ? suiteOcrLanguages : DEFAULT_OCR_LANGUAGES))
 
 ; Support/QA entry point for testing the exact source and compiled OCR paths without UI automation.
-if (A_Args.Length > 1 && A_Args[1] == "--ocr-file") {
-    cliLanguages := A_Args.Length > 2 ? A_Args[3] : OCR_LANGUAGES
-    cliEngine := A_Args.Length > 3 ? A_Args[4] : OCR_ENGINE
-    cliResult := RunLocalOcr(A_Args[2], cliEngine, cliLanguages)
-    cliOutput := cliResult.ok ? "OK|" cliResult.engine "|" cliResult.language "`r`n" cliResult.text
-        : "ERROR|" cliResult.error "`r`n"
-    cliOutputPath := Trim(EnvGet("CLIPOCR_OCR_OUTPUT"))
-    if (cliOutputPath != "") {
-        try FileDelete(cliOutputPath)
-        FileAppend(cliOutput, cliOutputPath, "UTF-8")
+if (CLI_MODE == "--ocr-file") {
+    if (A_Args.Length > 1) {
+        cliLanguages := A_Args.Length > 2 ? A_Args[3] : OCR_LANGUAGES
+        cliEngine := A_Args.Length > 3 ? A_Args[4] : OCR_ENGINE
+        cliResult := RunLocalOcr(A_Args[2], cliEngine, cliLanguages)
+    } else {
+        ; A malformed CLI call must still exit here; falling through would start a second tray instance.
+        cliResult := { ok: false, engine: "", language: "", text: "", error: "usage: --ocr-file <image> [languages] [engine]" }
     }
-    if cliResult.ok
-        ExitApp(0)
-    ExitApp(2)
+    WriteOcrCliResult(cliResult)
+    ExitApp(cliResult.ok ? 0 : 2)
 }
 
 ; ── System tray icon and menu customization ──
@@ -512,17 +650,20 @@ NormalizeSaveImageFormat(value) {
     return (value == "jpg") ? "jpg" : "png"
 }
 
+; Stored values outside the practical range fall back to the default; the dialog rejects such input
+; up front via IsValidTextTranslateFontSize so nothing is replaced silently.
 NormalizeTextTranslateFontSize(value) {
-    try {
-        fontSize := Integer(value)
-    } catch {
-        return 10
-    }
+    global TEXT_TRANSLATE_FONT_SIZE_DEFAULT
+    return IsValidTextTranslateFontSize(value) ? Integer(value) : TEXT_TRANSLATE_FONT_SIZE_DEFAULT
+}
 
-    ; Keep the translation popup in a practical size range.
-    if (fontSize < 8 || fontSize > 18)
-        return 10
-    return fontSize
+IsValidTextTranslateFontSize(value) {
+    global TEXT_TRANSLATE_FONT_SIZE_MIN, TEXT_TRANSLATE_FONT_SIZE_MAX
+    try
+        fontSize := Integer(value)
+    catch
+        return false
+    return fontSize >= TEXT_TRANSLATE_FONT_SIZE_MIN && fontSize <= TEXT_TRANSLATE_FONT_SIZE_MAX
 }
 
 NormalizeLangCodeList(csvText, defaultCsv := "ko,en,pl") {
@@ -578,13 +719,13 @@ EstimateOutlookWebMailSize() {
     global MAIL_SIZE_CHECK_RUNNING, MAIL_COPY_TIMEOUT_SECONDS
 
     if MAIL_SIZE_CHECK_RUNNING {
-        ShowMailSizeTooltip("A mail size estimate is already running.")
+        ShowTimedTooltip("A mail size estimate is already running.")
         return
     }
 
     sourceHwnd := WinExist("A")
     if !IsOutlookWebMailContext(sourceHwnd) {
-        ShowMailSizeTooltip("Open an Outlook web mail compose window and try again.")
+        ShowTimedTooltip("Open an Outlook web mail compose window and try again.")
         return
     }
 
@@ -651,7 +792,7 @@ EstimateOutlookWebMailSize() {
 
     if !restoreOk
         message .= "`r`nWarning: The original clipboard could not be restored."
-    ShowMailSizeTooltip(message, restoreOk ? 5000 : 7000)
+    ShowTimedTooltip(message, restoreOk ? 5000 : 7000)
 }
 
 IsOutlookWebMailContext(hwnd) {
@@ -724,7 +865,7 @@ ClipboardHasHtmlFormat() {
     return htmlFormat && DllCall("IsClipboardFormatAvailable", "UInt", htmlFormat)
 }
 
-ShowMailSizeTooltip(message, durationMs := 5000) {
+ShowTimedTooltip(message, durationMs := 5000) {
     ToolTip(message)
     SetTimer(() => ToolTip(), -durationMs)
 }
@@ -794,7 +935,10 @@ SetOcrEngine(engine) {
 
 SetOcrLanguages(languages) {
     global OCR_LANGUAGES, REG_PATH
-    OCR_LANGUAGES := NormalizeOcrLanguages(languages)
+    normalized := NormalizeOcrLanguages(languages)
+    if (normalized == "")
+        return false
+    OCR_LANGUAGES := normalized
     return SafeRegWriteString(OCR_LANGUAGES, REG_PATH, "OcrLanguages")
 }
 
@@ -2398,7 +2542,7 @@ GetEstimatedImageSize(pBitmap, format, quality) {
         return -1
 
     format := NormalizeSaveImageFormat(format)
-    estimateDir := A_Temp "\ClipOCR-Pro"
+    estimateDir := GetAppTempDir()
     estimateFile := estimateDir "\image_estimate_" DllCall("GetCurrentProcessId") "_" A_TickCount "." format
     try {
         if !DirExist(estimateDir)
@@ -2677,7 +2821,10 @@ RunTextTranslateHotkey(*) {
 ApplyTextTranslateHotkey() {
     global TEXT_TRANSLATE_HOTKEY
     try {
-        Hotkey(TEXT_TRANSLATE_HOTKEY, RunTextTranslateHotkey, "On")
+        ; Win+CapsLock is the documented default and stays registered even when an alternative is chosen.
+        Hotkey("#CapsLock", RunTextTranslateHotkey, "On")
+        if (TEXT_TRANSLATE_HOTKEY != "#CapsLock")
+            Hotkey(TEXT_TRANSLATE_HOTKEY, RunTextTranslateHotkey, "On")
         return true
     } catch as e {
         ToolTip("⚠️ 번역 단축키 설정 실패: " e.Message)
@@ -2693,11 +2840,12 @@ SetTextTranslateHotkey(hotkey) {
 
     oldHotkey := TEXT_TRANSLATE_HOTKEY
     if (oldHotkey != hotkey) {
-        try Hotkey(oldHotkey, "Off")
+        if (oldHotkey != "#CapsLock")
+            try Hotkey(oldHotkey, "Off")
         TEXT_TRANSLATE_HOTKEY := hotkey
         if !ApplyTextTranslateHotkey() {
             TEXT_TRANSLATE_HOTKEY := oldHotkey
-            try Hotkey(oldHotkey, RunTextTranslateHotkey, "On")
+            try ApplyTextTranslateHotkey()
             return false
         }
     }
@@ -3212,55 +3360,56 @@ SwitchDashboardPanel(tabIndex, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPan
     }
 }
 
-SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipboardChk, FontSizeEdit, HotkeyCombo,
-    LangCombo, LV_ImageLangs, SaveFolderEdit, initialSaveFolder, OcrEngineCombo, initialOcrEngine,
-    OcrLanguagesEdit, initialOcrLanguages) {
+SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipboardChk, initialAutoClipboard,
+    FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit, saveFolderChosen, OcrEngineCombo,
+    initialOcrEngine, OcrLanguagesEdit, initialOcrLanguages) {
     global IMAGE_TRANSLATE_LANGS, REG_PATH
-    settingsSaved := true
+    ; Returns the list of settings that could not be saved (empty means everything succeeded).
+    problems := []
 
-    if (StrLower(Trim(SaveFolderEdit.Value)) != StrLower(Trim(initialSaveFolder))) {
+    ; Suite-backed settings are written locally only when the user changed them here, so an
+    ; unrelated Save never pins a managed default (and an explicit Desktop choice is still persisted).
+    if saveFolderChosen {
         if !SetSaveFolder(SaveFolderEdit.Value)
-            settingsSaved := false
+            problems.Push("Save folder / 저장 폴더")
     }
 
-    if !SetAutoClipboard(AutoClipboardChk.Value)
-        settingsSaved := false
+    if (AutoClipboardChk.Value != initialAutoClipboard) {
+        if !SetAutoClipboard(AutoClipboardChk.Value)
+            problems.Push("Auto-copy / 자동 복사")
+    }
 
     selectedOcrEngine := GetOcrEngineByLabel(OcrEngineCombo.Text)
     if (selectedOcrEngine != initialOcrEngine) {
         if !SetOcrEngine(selectedOcrEngine)
-            settingsSaved := false
+            problems.Push("OCR engine / OCR 엔진")
     }
+    ; Input validity is established by ValidateDashboardInputs before this function runs.
     normalizedOcrLanguages := NormalizeOcrLanguages(OcrLanguagesEdit.Value)
     if (normalizedOcrLanguages != initialOcrLanguages) {
         if !SetOcrLanguages(normalizedOcrLanguages)
-            settingsSaved := false
+            problems.Push("OCR languages / OCR 언어")
     }
 
-    if StartupChk.Value {
-        if !EnableStartup()
-            settingsSaved := false
-    } else {
-        if !DisableStartup()
-            settingsSaved := false
-    }
+    if !(StartupChk.Value ? EnableStartup() : DisableStartup())
+        problems.Push("Run at startup / 시작 프로그램")
 
     if !SetClipWidth(GetClipWidthFromLabel(WidthCombo.Text))
-        settingsSaved := false
+        problems.Push("Clip width / 클립 너비")
     selectedPreset := GetImageSavePresetFromLabel(PresetCombo.Text)
     if !SetSaveImageFormat(selectedPreset.format)
-        settingsSaved := false
+        problems.Push("Image format / 이미지 형식")
     if !SetJpegQuality(selectedPreset.quality)
-        settingsSaved := false
+        problems.Push("Image quality / 이미지 품질")
     UpdateImageSavePresetMenu()
     if !SetCopyOutline(OutlineChk.Value)
-        settingsSaved := false
+        problems.Push("Outline / 외곽선")
     if !SetTextTranslateFontSize(FontSizeEdit.Value)
-        settingsSaved := false
+        problems.Push("Translate font size / 번역 글꼴 크기")
     if !SetTextTranslateHotkey(GetTextTranslateHotkeyByLabel(HotkeyCombo.Text))
-        settingsSaved := false
+        problems.Push("Translation hotkey / 번역 단축키")
     if !SetTextTranslateLang(GetTextTranslateLangCodeByLabel(LangCombo.Text))
-        settingsSaved := false
+        problems.Push("Target language / 번역 언어")
 
     selectedCodes := []
     row := 0
@@ -3277,10 +3426,10 @@ SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipb
         newImageLangs .= (i == 1 ? "" : ",") code
     IMAGE_TRANSLATE_LANGS := NormalizeLangCodeList(newImageLangs)
     if !SafeRegWriteString(IMAGE_TRANSLATE_LANGS, REG_PATH, "ImageTranslateLangs")
-        settingsSaved := false
+        problems.Push("Image translate languages / 이미지 번역 언어")
     UpdateImageTranslateMenu()
 
-    return settingsSaved
+    return problems
 }
 
 ShowDashboardDialog() {
@@ -3347,6 +3496,7 @@ ShowDashboardDialog() {
     OutlineChk := DashGui.Add("CheckBox", "x180 y162 w285 h28 Background1E1E24 cCCCCCC" (COPY_OUTLINE_ENABLED ? " Checked" : ""),
         " Add 1px black outline")
     GenPanel.Push(OutlineChk)
+    initialAutoClipboard := AUTO_CLIPBOARD
     AutoClipboardChk := DashGui.Add("CheckBox", "x470 y162 w290 h28 Background1E1E24 cCCCCCC" (AUTO_CLIPBOARD ? " Checked" : ""),
         " Auto-copy new captures")
     GenPanel.Push(AutoClipboardChk)
@@ -3380,6 +3530,7 @@ ShowDashboardDialog() {
     GenPanel.Push(lblSave)
     GenPanel.Push(DashGui.Add("Text", "x180 y442 w110 h22 +BackgroundTrans cCCCCCC", "Save Folder"))
     initialSaveFolder := GetSaveFolder()
+    saveFolderChosen := false
     SaveFolderEdit := DashGui.Add("Edit", "x295 y438 w305 h24 ReadOnly", initialSaveFolder)
     GenPanel.Push(SaveFolderEdit)
     BrowseSaveBtn := DashGui.Add("Button", "x610 y437 w150 h26", "📁 Browse…")
@@ -3387,8 +3538,10 @@ ShowDashboardDialog() {
 
     BrowseSaveFolder(*) {
         selected := DirSelect("*" GetSaveFolder(), 3, "Choose a folder to save captured images")
-        if (selected != "")
+        if (selected != "") {
             SaveFolderEdit.Value := selected
+            saveFolderChosen := true
+        }
     }
     BrowseSaveBtn.OnEvent("Click", BrowseSaveFolder)
 
@@ -3576,15 +3729,38 @@ ShowDashboardDialog() {
     SaveBtn := DashGui.Add("Button", "x550 y525 w100 h32", "Save && Close")
     CancelBtn := DashGui.Add("Button", "x660 y525 w100 h32", "Cancel")
 
+    ; Free-text fields are validated before anything is persisted, so a rejected field never closes
+    ; the dialog with the other settings half-applied. Returns the first offending field or "".
+    ValidateDashboardInputs() {
+        if (NormalizeOcrLanguages(OcrLanguagesEdit.Value) == "")
+            return { control: OcrLanguagesEdit, panel: 2,
+                message: "⚠️ OCR languages: use BCP 47 tags such as ko-KR,en-US`r`n⚠️ OCR 언어는 ko-KR,en-US 같은 BCP 47 태그로 입력하세요." }
+        if !IsValidTextTranslateFontSize(FontSizeEdit.Value)
+            return { control: FontSizeEdit, panel: 1,
+                message: Format("⚠️ Translate font size must be between {1} and {2}.`r`n⚠️ 번역 글꼴 크기는 {1}–{2} 사이여야 합니다.",
+                    TEXT_TRANSLATE_FONT_SIZE_MIN, TEXT_TRANSLATE_FONT_SIZE_MAX) }
+        return ""
+    }
+
     SaveAllSettings(*) {
-        settingsSaved := SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipboardChk,
-            FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit, initialSaveFolder,
-            OcrEngineCombo, initialOcrEngine, OcrLanguagesEdit, initialOcrLanguages)
-        if settingsSaved
-            ToolTip("✅ All settings saved.")
-        else
-            ToolTip("⚠️ Some settings could not be saved.`r`n⚠️ 일부 설정을 저장하지 못했습니다.")
-        SetTimer(() => ToolTip(), -1500)
+        invalid := ValidateDashboardInputs()
+        if IsObject(invalid) {
+            SwitchDashboardPanel(invalid.panel, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel, AbtPanel)
+            try invalid.control.Focus()
+            ShowTimedTooltip(invalid.message, 4000)
+            return
+        }
+        problems := SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipboardChk,
+            initialAutoClipboard, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit,
+            saveFolderChosen, OcrEngineCombo, initialOcrEngine, OcrLanguagesEdit, initialOcrLanguages)
+        if (problems.Length == 0) {
+            ShowTimedTooltip("✅ All settings saved.", 1500)
+        } else {
+            detail := ""
+            for _, problem in problems
+                detail .= "`r`n• " problem
+            ShowTimedTooltip("⚠️ Some settings could not be saved / 일부 설정을 저장하지 못했습니다:" detail, 5000)
+        }
         DestroyDash()
     }
 

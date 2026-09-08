@@ -8,7 +8,7 @@ ClipOCR-Pro keeps text extraction local. The Light executable uses `Windows.Medi
 - `Windows OCR only`: use only OCR languages installed in Windows.
 - `Portable Tesseract only`: use only the adjacent portable runtime.
 
-Language tags use BCP 47, for example `ko-KR,en-US`. Windows may expose a neutral tag such as `ko`; ClipOCR-Pro matches the base language. Tesseract maps those defaults to `kor+eng`.
+Language tags use BCP 47, for example `ko-KR,en-US`; script subtags such as `zh-Hans-CN` or `sr-Cyrl` are accepted as well. Windows may expose a neutral tag such as `ko`; ClipOCR-Pro matches the base language. Tesseract receives the matching `tessdata` code (`ko` → `kor`, `en` → `eng`, `ja` → `jpn`, `zh-Hant` → `chi_tra`, and so on); unmapped three-letter codes are passed through unchanged. An invalid language list is rejected in the settings dialog rather than silently replaced with the default.
 
 ## English Windows without a Korean language pack
 
@@ -31,6 +31,8 @@ The build does not fetch OCR binaries. Obtain and approve a portable Windows Tes
 ```
 
 The build rejects a Full package unless `tesseract.exe`, Korean data, and English data are present and the runtime successfully reports both `kor` and `eng`. It copies the complete approved runtime so its required DLLs are preserved. The resulting `App03_ClipOCR-Pro_vX.Y.Z-Full.zip` is checksummed in `SHA256SUMS.txt` and listed in the build manifest together with the detected Tesseract version.
+
+The Full ZIP is produced only by this explicit `build.ps1` invocation and is distributed internally by the administrator. `publish.ps1` uploads the Light artifacts only and never bundles the approved runtime into a public GitHub release; the app-side `CLIPOCR_TESSERACT_DIR` environment variable is not consulted by the build.
 
 ## Privacy boundary
 

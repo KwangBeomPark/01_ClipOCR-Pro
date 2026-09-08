@@ -49,12 +49,13 @@ If no release file is available yet, please build or run the source using AutoHo
 
 1. Install [AutoHotkey v2](https://www.autohotkey.com/) with Ahk2Exe.
 2. Clone this repository and customize the source as needed.
-3. Run `./scripts/build.ps1`. It performs source and compiled health checks, then writes the EXE, ZIP, SHA-256 list, and build manifest to `dist/`. It never commits, pushes, tags, or publishes.
+3. Run `./scripts/build.ps1`. It performs source and compiled health checks, then writes the EXE, ZIP, SHA-256 list, and build manifest to `dist/`. It never commits, pushes, tags, or publishes. On a PC where Windows Smart App Control is turned on, a freshly built executable cannot run its compiled health check unless it is signed by a trusted CA (a self-signed test certificate does not help); the script checks before compiling whether the configured certificate chains to a trusted CA and stops early otherwise. For local development builds pass `-SkipCompiledHealthCheck` (recorded in the manifest, and `publish.ps1` refuses such builds); release builds signed with the release certificate run the check normally.
 4. Maintainers publish only through `./scripts/publish.ps1` after committing a clean `main` branch. The command prompts before pushing and creating an immutable GitHub release and refuses to replace an existing version.
+5. If `./scripts/static-check.ps1` reports files that are not LF-normalized (older clones made with `core.autocrlf=true`), run `./scripts/normalize-eol.ps1`: it renormalizes committed CRLF files for you to commit and rewrites CRLF checkouts from the index, skipping any file with unstaged edits.
 
 `./scripts/build.ps1 -TesseractDirectory C:\Approved\Tesseract` additionally creates the Full ZIP after verifying `tesseract.exe`, `tessdata\kor.traineddata`, and `tessdata\eng.traineddata`. The repository and Light build never bundle or download an unofficial OCR binary. See [OCR packaging](docs/OCR_PACKAGING.md).
 
-Optional Authenticode signing uses `CLIPOCR_SIGN_CERT_PATH` for a private-key PFX, `CLIPOCR_SIGN_CERT_PASSWORD` for its password, and optional `CLIPOCR_TIMESTAMP_SERVER`. Public `.cer` files cannot sign executables. Publishing requires a signature unless the maintainer explicitly passes `-AllowUnsigned`.
+Release signing selects the code-signing certificate from the Windows certificate store by SHA-1 thumbprint (`CLIPOCR_SIGN_CERT_THUMBPRINT`). That is how card- or cloud-backed certificates such as Certum's Open Source Code Signing (card reader or SimplySign Desktop) are exposed: the private key never leaves the token. An RFC 3161 timestamp server is required (`CLIPOCR_TIMESTAMP_SERVER`, for Certum `http://time.certum.pl`) so signatures stay valid after the certificate expires. `signtool.exe` from the Windows SDK is used when available (`CLIPOCR_SIGNTOOL_PATH` overrides discovery) and produces an RFC 3161 timestamp; without it the build falls back to `Set-AuthenticodeSignature`, which can only apply a legacy Authenticode timestamp — the manifest records which one was used (`timestampType`), so install the Windows SDK signing tools for release builds; `publish.ps1` refuses a release whose timestamp is not RFC 3161 unless `-AllowLegacyTimestamp` is passed explicitly. A PFX file (`CLIPOCR_SIGN_CERT_PATH` + `CLIPOCR_SIGN_CERT_PASSWORD`) is accepted only as a development fallback for self-signed test certificates. The build resolves the certificate, timestamp server, and signing tool before compiling; a card or cloud token that is not connected fails at the signing step with instructions for reconnecting it. `publish.ps1` additionally requires the signer to be issued by the release CA (pattern `CN=Certum Code Signing*`, override with `CLIPOCR_RELEASE_SIGNER_ISSUER`) and rejects self-issued certificates; publishing requires a signature unless the maintainer explicitly passes `-AllowUnsigned`.
 
 ---
 
@@ -90,7 +91,7 @@ Optional Authenticode signing uses `CLIPOCR_SIGN_CERT_PATH` for a private-key PF
 | Shortcut | Function |
 |---------|----------|
 | `Win + Drag` | Capture a screen area and keep it floating on top; automatic clipboard copy follows the General setting |
-| `Win + CapsLock` | Translate selected text using the configured Google Translate workflow |
+| `Win + CapsLock` | Translate selected text using the configured Google Translate workflow (always active; a hotkey chosen in Preferences is added alongside it, not substituted) |
 | `Ctrl + Win + 0` inside an Outlook web mail body | Show a conservative attachment-free body and subject/header estimate in MB |
 | Right-click on floating window | Open image translation, annotation, copy/save, and window management menu |
 | Right-click → `Extract Text (Local OCR)` | Extract text locally and open a copyable result window; no translation consent or external upload is involved |
@@ -118,7 +119,7 @@ Current settings include clipboard image size, automatic clipboard copy, file-sa
 
 When an administrator enables the optional `PL_Suite\ClipOCR` integration, ClipOCR-Pro can read managed defaults for capture behavior and the explicit `Ctrl + S` save folder. Existing values under the app-owned path above always win, and the Suite registry is never written by the app. Translation consent remains app-local. Managed folders are never used to save captures automatically.
 
-Opening the About tab checks the latest GitHub release. `Download & Update` is enabled only when a newer version exists. After confirmation, the compiled app downloads the official EXE to a staging folder, verifies its GitHub-provided size and SHA-256 digest plus its embedded version, replaces the current app, and restarts. Save or copy any open capture windows first. Source runs and releases without a verifiable EXE fall back to the release page.
+Opening the About tab checks the latest GitHub release. `Download & Update` is enabled only when a newer version exists. After confirmation, the compiled app downloads the official EXE to a staging folder, verifies its GitHub-provided size and SHA-256 digest plus its embedded version, replaces the current app, and restarts. Save or copy any open capture windows first. Source runs and releases without a verifiable EXE fall back to the release page. Unhandled runtime errors are appended to `%TEMP%\ClipOCR-Pro\error.log` (rolled over at 256 KB; message, source location and call stack only) so they can be attached to a support request.
 
 Every push and pull request also runs repository policy checks and the Windows build workflow with checksum-pinned official AutoHotkey and Ahk2Exe tools. CI publishes test artifacts only; it has no release permission.
 

@@ -5,29 +5,53 @@ NormalizeOcrEngine(value) {
     return (normalized == "windows" || normalized == "tesseract") ? normalized : "auto"
 }
 
+global DEFAULT_OCR_LANGUAGES := "ko-KR,en-US"
+
+; Accepts BCP 47 tags with script and region subtags (ko, en-US, zh-Hans-CN, sr-Cyrl), returns them
+; canonically cased and de-duplicated. Returns "" when no entry is valid so callers can distinguish
+; invalid input from the default instead of silently substituting it.
 NormalizeOcrLanguages(value) {
     normalized := []
     seen := Map()
     for _, rawCode in StrSplit(StrReplace(String(value), ";", ","), ",") {
         code := Trim(StrReplace(rawCode, "_", "-"))
-        if !RegExMatch(code, "i)^[a-z]{2,3}(?:-[a-z]{2})?$")
+        if !RegExMatch(code, "i)^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$")
             continue
-        parts := StrSplit(code, "-")
-        code := StrLower(parts[1])
-        if (parts.Length > 1)
-            code .= "-" StrUpper(parts[2])
-        key := StrLower(code)
+        canonical := ""
+        for index, part in StrSplit(code, "-") {
+            if (index == 1)
+                canonical := StrLower(part)
+            else if (StrLen(part) == 4 && RegExMatch(part, "i)^[a-z]+$"))
+                canonical .= "-" StrUpper(SubStr(part, 1, 1)) StrLower(SubStr(part, 2))
+            else if (StrLen(part) == 2 || RegExMatch(part, "^\d{3}$"))
+                canonical .= "-" StrUpper(part)
+            else
+                canonical .= "-" StrLower(part)
+        }
+        key := StrLower(canonical)
         if !seen.Has(key) {
             seen[key] := true
-            normalized.Push(code)
+            normalized.Push(canonical)
         }
     }
-    if (normalized.Length == 0)
-        return "ko-KR,en-US"
     result := ""
     for index, code in normalized
         result .= (index == 1 ? "" : ",") code
     return result
+}
+
+ResolveOcrLanguages(value) {
+    global DEFAULT_OCR_LANGUAGES
+    normalized := NormalizeOcrLanguages(value)
+    return normalized != "" ? normalized : DEFAULT_OCR_LANGUAGES
+}
+
+; Both engines return CRLF-separated lines so the result popup and clipboard see the same shape.
+NormalizeOcrText(text) {
+    text := StrReplace(String(text), "`r`n", "`n")
+    text := StrReplace(text, "`r", "`n")
+    text := StrReplace(text, "`n", "`r`n")
+    return Trim(text, "`r`n `t")
 }
 
 GetOcrEngineOptions() {
@@ -101,7 +125,7 @@ RunWindowsOcr(imagePath, languages) {
         status := ReadOcrStatus(statusPath)
         if !status.ok
             return { ok: false, engine: "Windows OCR", language: "", text: "", error: status.code ": " status.message }
-        text := FileExist(outputPath) ? Trim(FileRead(outputPath, "UTF-8"), "`r`n `t") : ""
+        text := FileExist(outputPath) ? NormalizeOcrText(FileRead(outputPath, "UTF-8")) : ""
         return { ok: true, engine: "Windows OCR", language: status.code, text: text, error: "" }
     } catch as e {
         return { ok: false, engine: "Windows OCR", language: "", text: "", error: ShortErrorMessage(e.Message) }
@@ -133,17 +157,55 @@ FindPortableTesseract() {
     return 0
 }
 
+; Maps a BCP 47 tag to the tessdata file name. Windows supplies the ISO 639-2/T code for any
+; two-letter language it knows (GetLocaleInfoEx), which is what tessdata uses; the map holds only
+; the exceptions (Norwegian data is "nor"), Chinese is split by script rather than language, and
+; anything else (three-letter codes) passes through unchanged.
 GetTesseractLanguageCode(language) {
-    languageMap := Map("ko", "kor", "en", "eng", "pl", "pol", "de", "deu", "fr", "fra", "es", "spa")
-    baseLanguage := StrLower(StrSplit(language, "-")[1])
-    return languageMap.Has(baseLanguage) ? languageMap[baseLanguage] : baseLanguage
+    static tessdataExceptions := Map("nb", "nor", "nn", "nor", "no", "nor")
+    parts := StrSplit(StrLower(Trim(String(language))), "-")
+    baseLanguage := parts[1]
+    if (baseLanguage == "zh") {
+        ; An explicit script subtag wins over the region (zh-Hans-HK is Simplified).
+        script := ""
+        traditionalRegion := false
+        for index, part in parts {
+            if (index == 1)
+                continue
+            if (part == "hans" || part == "hant")
+                script := part
+            else if (part == "tw" || part == "hk" || part == "mo")
+                traditionalRegion := true
+        }
+        if (script == "hans")
+            return "chi_sim"
+        return (script == "hant" || traditionalRegion) ? "chi_tra" : "chi_sim"
+    }
+    if tessdataExceptions.Has(baseLanguage)
+        return tessdataExceptions[baseLanguage]
+    if (StrLen(baseLanguage) == 2) {
+        ; Windows knows the ISO 639-2 code for every two-letter language it supports (fa -> fas).
+        iso3 := GetIso639LanguageCode(baseLanguage)
+        if (iso3 != "")
+            return iso3
+    }
+    return baseLanguage
+}
+
+GetIso639LanguageCode(baseLanguage) {
+    static LOCALE_SISO639LANGNAME2 := 0x67
+    nameBuffer := Buffer(9 * 2, 0)
+    length := DllCall("GetLocaleInfoEx", "WStr", baseLanguage, "UInt", LOCALE_SISO639LANGNAME2, "Ptr", nameBuffer, "Int", 9, "Int")
+    code := length > 1 ? StrLower(StrGet(nameBuffer, "UTF-16")) : ""
+    ; Windows echoes names it does not recognize (or reports "zzz"); only a real three-letter code counts.
+    return (StrLen(code) == 3 && code != "zzz") ? code : ""
 }
 
 ResolveTesseractLanguages(languages, tessdataPath) {
     codes := []
     missing := []
     seen := Map()
-    for _, language in StrSplit(NormalizeOcrLanguages(languages), ",") {
+    for _, language in StrSplit(ResolveOcrLanguages(languages), ",") {
         code := GetTesseractLanguageCode(language)
         if seen.Has(code)
             continue
@@ -180,7 +242,7 @@ RunTesseractOcr(imagePath, languages) {
         exitCode := RunWait(command, , "Hide")
         if (exitCode != 0 || !FileExist(outputPath))
             return { ok: false, engine: "Tesseract", language: resolvedLanguages.value, text: "", error: "Tesseract exited with code " exitCode "." }
-        text := Trim(FileRead(outputPath, "UTF-8"), "`r`n `t")
+        text := NormalizeOcrText(FileRead(outputPath, "UTF-8"))
         warning := resolvedLanguages.missing.Length > 0 ? "Some requested language data was unavailable." : ""
         return { ok: true, engine: "Tesseract", language: resolvedLanguages.value, text: text, error: warning }
     } catch as e {
@@ -212,7 +274,7 @@ GetOcrUserFailureMessage(error) {
 
 RunLocalOcr(imagePath, engine, languages) {
     engine := NormalizeOcrEngine(engine)
-    languages := NormalizeOcrLanguages(languages)
+    languages := ResolveOcrLanguages(languages)
     errors := []
 
     if (engine == "windows") {

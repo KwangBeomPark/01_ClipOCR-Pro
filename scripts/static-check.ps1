@@ -3,10 +3,12 @@ param()
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "Common.ps1")
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $mainPath = Join-Path $repoRoot "src\ClipOCR-Pro.ahk"
-$main = Get-Content -Raw -LiteralPath $mainPath
+# Normalize once so every anchored regex below is line-ending agnostic (editors may save CRLF).
+$main = (Get-Content -Raw -LiteralPath $mainPath) -replace "`r`n", "`n"
 $failures = [Collections.Generic.List[string]]::new()
 
 function Assert-Project {
@@ -17,6 +19,8 @@ function Assert-Project {
 }
 
 foreach ($scriptPath in @(
+    (Join-Path $PSScriptRoot "Common.ps1"),
+    (Join-Path $PSScriptRoot "normalize-eol.ps1"),
     (Join-Path $PSScriptRoot "build.ps1"),
     (Join-Path $PSScriptRoot "publish.ps1"),
     (Join-Path $PSScriptRoot "Invoke-WindowsOcr.ps1"),
@@ -28,16 +32,45 @@ foreach ($scriptPath in @(
     Assert-Project ($parseErrors.Count -eq 0) "PowerShell syntax errors in $scriptPath"
 }
 
-$appVersion = [regex]::Match($main, 'global APP_VERSION\s*:=\s*"([^"]+)"')
-$fileVersion = [regex]::Match($main, ';@Ahk2Exe-SetVersion\s+([^\s]+)')
-Assert-Project $appVersion.Success "APP_VERSION is missing."
-Assert-Project $fileVersion.Success "Ahk2Exe file version is missing."
-if ($appVersion.Success -and $fileVersion.Success) {
-    Assert-Project ($fileVersion.Groups[1].Value -eq "$($appVersion.Groups[1].Value).0") "App and file versions differ."
+# Line endings are pinned by .gitattributes so CI and local builds hash identically; the policy
+# must exist and the checked-out tree must actually be normalized (older clones may still hold CRLF).
+$gitAttributesPath = Join-Path $repoRoot ".gitattributes"
+$gitAttributes = if (Test-Path -LiteralPath $gitAttributesPath -PathType Leaf) { Get-Content -Raw -LiteralPath $gitAttributesPath } else { "" }
+Assert-Project ($gitAttributes -match '(?m)^\*\s+text=auto\s+eol=lf') ".gitattributes must exist and pin '* text=auto eol=lf'."
+# Only an exported source archive has no .git entry (clones, worktrees and submodules all do); every
+# other git failure, such as dubious ownership, must fail the check rather than skip it.
+if (Test-Path -LiteralPath (Join-Path $repoRoot ".git")) {
+    # scripts/normalize-eol.ps1 owns the repair; both scripts share the parser in Common.ps1.
+    try {
+        $unnormalized = @(Get-UnnormalizedTextEolEntries $repoRoot | ForEach-Object { $_.Path })
+        Assert-Project ($unnormalized.Count -eq 0) "Tracked text files are not LF-normalized; run scripts/normalize-eol.ps1: $($unnormalized -join ', ')"
+    } catch {
+        Assert-Project $false "Could not verify line endings: $($_.Exception.Message)"
+    }
+} else {
+    Write-Host "Line-ending check skipped: no .git entry (exported source archives are LF by construction)."
+}
+
+$appVersionValue = $null
+$fileVersionValue = $null
+try {
+    $appVersionValue = Get-AppVersion -SourceText $main
+} catch {
+    $appVersionValue = $null
+}
+try {
+    $fileVersionValue = Get-Ahk2ExeFileVersion -SourceText $main
+} catch {
+    $fileVersionValue = $null
+}
+Assert-Project ($null -ne $appVersionValue) "APP_VERSION is missing."
+Assert-Project ($null -ne $fileVersionValue) "Ahk2Exe file version is missing."
+if ($null -ne $appVersionValue -and $null -ne $fileVersionValue) {
+    Assert-Project ($fileVersionValue -eq "$appVersionValue.0") "App and file versions differ."
 }
 
 foreach ($include in @("SuiteRegistry.ahk", "OcrService.ahk", "HealthCheck.ahk")) {
-    Assert-Project ($main -match "(?m)^#Include $([regex]::Escape($include))\r?$") "Missing module include: $include"
+    Assert-Project ($main -match "(?m)^#Include $([regex]::Escape($include))$") "Missing module include: $include"
 }
 
 $menuNumbers = @([regex]::Matches($main, '(?m)^ClipMenu\.Add\("[^"]*? (\d+)\.') |
@@ -58,14 +91,32 @@ Assert-Project ($ocrText -notmatch 'https?://|GoogleTranslate|EnsureTranslationC
 Assert-Project ($ocrHelperText -notmatch 'Invoke-WebRequest|HttpClient|WebClient|https?://') "Windows OCR helper contains network access."
 Assert-Project ($main -match 'FileInstall\("\.\.\\scripts\\Invoke-WindowsOcr\.ps1"') "Compiled OCR helper embedding is missing."
 
+# Matches an invocation of $Executable with $Verb in every form the scripts use: a bare command
+# (`git push`, `& git -C $root push`) or an argument array (`Invoke-Native git @("push", ...)`,
+# `git ($base + @("-C", $root, "push"))`). The executable must sit where a command can start (line
+# start, after an operator, or as the tool passed to Invoke-Native), so prose in strings or comments
+# such as "commit them" never matches.
+function Get-NativeCallPattern {
+    param([string]$Executable, [string]$Verb)
+
+    $token = '(?:^|[=(&|;{]|Invoke-Native(?:Checked)?)\s*' + $Executable + '(?:\.exe)?'
+    $bare = '(?:\s+[^\s"''()@;|&#]+)*?\s+' + $Verb + '(?![\w-])'
+    $array = '\s+\(?\s*(?:\$\w+\s*\+\s*)?@\(\s*(?:(?:"[^"]*"|''[^'']*''|\$[\w.]+)\s*,\s*)*?["'']' + $Verb + '["'']'
+    return "(?im)$token(?:$bare|$array)"
+}
+
 $buildText = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "build.ps1")
 $publishText = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "publish.ps1")
-Assert-Project ($buildText -notmatch '(?im)^\s*(git\s+push|gh\s+release)') "Build script must not publish."
-Assert-Project ($publishText -notmatch '(?im)^\s*git\s+(commit|add)') "Publish script must not create commits."
+Assert-Project ($buildText -notmatch (Get-NativeCallPattern 'git' 'push')) "Build script must not push."
+Assert-Project ($buildText -notmatch '(?im)(?:^|[=(&|;{]|Invoke-Native(?:Checked)?)\s*gh(?:\.exe)?(?:\s|$)') "Build script must not invoke gh."
+Assert-Project ($publishText -notmatch (Get-NativeCallPattern 'git' '(?:commit|add)')) "Publish script must not create commits."
 Assert-Project (Test-Path -LiteralPath (Join-Path $repoRoot "docs\OCR_PACKAGING.md") -PathType Leaf) "OCR deployment guide is missing."
 
 if ($failures.Count -gt 0) {
-    $failures | ForEach-Object { Write-Error "FAIL: $_" }
+    # Write-Error would become terminating under $ErrorActionPreference = "Stop" and hide the rest.
+    foreach ($failure in $failures) {
+        [Console]::Error.WriteLine("FAIL: $failure")
+    }
     exit 1
 }
 

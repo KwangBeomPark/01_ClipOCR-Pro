@@ -57,6 +57,11 @@ try {
         if (-not [string]::IsNullOrWhiteSpace($selected)) {
             break
         }
+        # A script-level request such as zh-Hant must prefer zh-Hant-TW over any other zh pack.
+        $selected = $available | Where-Object { $_.StartsWith("$request-", [StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
+        if (-not [string]::IsNullOrWhiteSpace($selected)) {
+            break
+        }
         $baseLanguage = $request.Split('-')[0]
         $selected = $available | Where-Object { $_.Split('-')[0] -ieq $baseLanguage } | Select-Object -First 1
         if (-not [string]::IsNullOrWhiteSpace($selected)) {
@@ -94,7 +99,9 @@ try {
         try {
             $resultOperation = $engine.RecognizeAsync($bitmap)
             $result = Await-WinRt $resultOperation ([Windows.Media.Ocr.OcrResult])
-            [IO.File]::WriteAllText($OutputPath, [string]$result.Text, [Text.UTF8Encoding]::new($false))
+            # OcrResult.Text joins every line with spaces; keep the recognized line structure instead.
+            $textLines = @($result.Lines | ForEach-Object { [string]$_.Text })
+            [IO.File]::WriteAllText($OutputPath, ($textLines -join "`r`n"), [Text.UTF8Encoding]::new($false))
             Write-Status "OK" $selected "Windows OCR"
         } finally {
             if ($null -ne $bitmap) {

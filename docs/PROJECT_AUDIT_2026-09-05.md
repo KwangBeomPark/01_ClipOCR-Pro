@@ -53,3 +53,7 @@ Ready with conditions. The Light build, source/compiled health checks, Korean Wi
 ## Audit boundary and residual risk
 
 The host had Windows OCR languages `en-GB`, `en-US`, `ko`, and `pl`, so fallback behavior for a machine with no Korean OCR pack was verified by logic/error-path testing rather than by removing system language features. A real portable Tesseract distribution and Authenticode private key were intentionally not sourced or stored in the repository. The live Suite key still contains ignored schema-2.0 values (`HotKeyCapture`, `OcrLanguage`) from an older import; the 2.1 adapter reads only the new names, so this is cleanup debt rather than a release blocker.
+
+## Addendum (2026-09-07)
+
+The signing procedure in "Recommended change set" item 3 is superseded. Release signing now selects the code-signing certificate from the Windows certificate store by thumbprint (`CLIPOCR_SIGN_CERT_THUMBPRINT`, e.g. a Certum card or SimplySign certificate), requires an RFC 3161 timestamp (`CLIPOCR_TIMESTAMP_SERVER` with `signtool.exe`), and `publish.ps1` refuses signed builds whose signature is not `Valid`, whose signer is not issued by the release CA (`CLIPOCR_RELEASE_SIGNER_ISSUER`, default `CN=Certum Code Signing*`), or whose timestamp is not RFC 3161 (waivable only with an explicit `-AllowLegacyTimestamp`). A PFX file is accepted only as a development fallback for self-signed test certificates and cannot be published. See the signing paragraph in [README.md](../README.md).

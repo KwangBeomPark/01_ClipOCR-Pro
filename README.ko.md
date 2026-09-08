@@ -49,12 +49,13 @@ AutoHotkey v2 기반의 포터블 화면 캡처, OCR, 선택 텍스트 번역, �
 
 1. Ahk2Exe가 포함된 [AutoHotkey v2](https://www.autohotkey.com/)를 설치합니다.
 2. 이 저장소를 Clone하고 필요한 소스를 수정합니다.
-3. `./scripts/build.ps1`을 실행합니다. 소스와 컴파일 EXE 자체 진단 후 `dist/`에 EXE, ZIP, SHA-256 목록, 빌드 매니페스트를 만듭니다. 이 명령은 커밋·푸시·태그·릴리즈를 수행하지 않습니다.
+3. `./scripts/build.ps1`을 실행합니다. 소스와 컴파일 EXE 자체 진단 후 `dist/`에 EXE, ZIP, SHA-256 목록, 빌드 매니페스트를 만듭니다. 이 명령은 커밋·푸시·태그·릴리즈를 수행하지 않습니다. Windows Smart App Control이 켜진 PC에서는 신뢰된 CA로 서명되지 않은 새 실행 파일(자체 서명 테스트 인증서 포함)이 컴파일 EXE 진단을 실행할 수 없으며, 스크립트는 컴파일 전에 설정된 인증서가 신뢰된 CA로 연결되는지 확인하고 그렇지 않으면 즉시 중단합니다. 로컬 개발 빌드는 `-SkipCompiledHealthCheck`를 지정하세요(매니페스트에 기록되며 `publish.ps1`은 그런 빌드를 거부합니다). 릴리즈 인증서로 서명한 빌드는 진단을 정상적으로 실행합니다.
 4. 유지관리자는 변경을 커밋하고 깨끗한 `main` 브랜치에서만 `./scripts/publish.ps1`로 배포합니다. 푸시와 변경 불가능한 GitHub 릴리즈 생성 직전에 확인하며 기존 버전을 덮어쓰지 않습니다.
+5. `./scripts/static-check.ps1`이 LF로 정규화되지 않은 파일을 보고하면(`core.autocrlf=true`로 만든 오래된 클론) `./scripts/normalize-eol.ps1`을 실행하세요. 커밋된 CRLF 파일은 인덱스에서 정규화해 커밋할 수 있게 하고, CRLF로 체크아웃된 파일은 인덱스 기준으로 다시 쓰며, 저장하지 않은 편집이 있는 파일은 건너뜁니다.
 
 `./scripts/build.ps1 -TesseractDirectory C:\Approved\Tesseract`를 실행하면 `tesseract.exe`, `tessdata\kor.traineddata`, `tessdata\eng.traineddata`를 검증한 뒤 Full ZIP도 만듭니다. 저장소와 Light 빌드는 출처가 검증되지 않은 OCR 실행 파일을 내려받거나 포함하지 않습니다. 자세한 내용은 [OCR 패키징 안내](docs/OCR_PACKAGING.md)를 참고하세요.
 
-선택형 Authenticode 서명은 개인키가 포함된 PFX 경로를 `CLIPOCR_SIGN_CERT_PATH`, 암호를 `CLIPOCR_SIGN_CERT_PASSWORD`, 선택형 타임스탬프 주소를 `CLIPOCR_TIMESTAMP_SERVER`에 지정합니다. 공개키뿐인 `.cer` 파일은 서명에 사용할 수 없습니다. 서명 없는 배포는 유지관리자가 `-AllowUnsigned`를 명시해야만 허용됩니다.
+릴리즈 서명은 Windows 인증서 저장소의 코드서명 인증서를 SHA-1 지문(`CLIPOCR_SIGN_CERT_THUMBPRINT`)으로 선택합니다. Certum 오픈소스 코드서명(카드 리더기 또는 SimplySign Desktop)처럼 카드·클라우드에 보관되는 인증서는 이 방식으로만 사용할 수 있으며 개인키는 토큰 밖으로 나오지 않습니다. 인증서 만료 후에도 서명이 유효하도록 RFC 3161 타임스탬프 서버(`CLIPOCR_TIMESTAMP_SERVER`, Certum은 `http://time.certum.pl`)가 필수입니다. Windows SDK의 `signtool.exe`가 있으면 사용하며(`CLIPOCR_SIGNTOOL_PATH`로 경로 지정 가능) 이때 RFC 3161 타임스탬프가 적용됩니다. 없으면 `Set-AuthenticodeSignature`로 대체되는데 이 경로는 레거시 Authenticode 타임스탬프만 가능하므로(매니페스트의 `timestampType`에 기록됨) 정식 릴리즈 빌드에는 Windows SDK 서명 도구를 설치하세요. `publish.ps1`은 RFC 3161이 아닌 타임스탬프가 붙은 빌드를 `-AllowLegacyTimestamp`를 명시하지 않는 한 거부합니다. PFX 파일(`CLIPOCR_SIGN_CERT_PATH` + `CLIPOCR_SIGN_CERT_PASSWORD`)은 자체 서명 테스트 인증서를 위한 개발용 대체 경로로만 허용됩니다. 빌드는 컴파일 전에 인증서, 타임스탬프 서버, 서명 도구를 확인하며, 카드·클라우드 토큰이 연결되지 않은 경우 서명 단계에서 재연결 안내와 함께 실패합니다. `publish.ps1`은 추가로 서명자가 릴리즈 CA(기본 패턴 `CN=Certum Code Signing*`, `CLIPOCR_RELEASE_SIGNER_ISSUER`로 변경 가능)에서 발급되었는지 확인하고 자체 발급 인증서를 거부합니다. 서명 없는 배포는 유지관리자가 `-AllowUnsigned`를 명시해야만 허용됩니다.
 
 ---
 
@@ -90,7 +91,7 @@ AutoHotkey v2 기반의 포터블 화면 캡처, OCR, 선택 텍스트 번역, �
 | 단축키 | 기능 |
 |--------|------|
 | `Win + Drag` | 화면 영역 캡처 후 항상 위에 플로팅하며, 자동 클립보드 복사는 General 설정을 따름 |
-| `Win + CapsLock` | 선택한 텍스트를 설정된 Google 번역 워크플로우로 번역 |
+| `Win + CapsLock` | 선택한 텍스트를 설정된 Google 번역 워크플로우로 번역 (항상 활성화되며, 설정에서 고른 단축키는 대체가 아니라 추가로 등록됨) |
 | Outlook 웹메일 본문에서 `Ctrl + Win + 0` | 본문과 제목·헤더를 포함한 첨부 제외 보수적 예상 크기를 MB로 표시 |
 | 플로팅 창에서 마우스 오른쪽 클릭 | 이미지 번역, 주석, 복사/저장, 창 관리 메뉴 열기 |
 | 우클릭 → `Extract Text (Local OCR)` | 이미지를 외부로 보내지 않고 텍스트를 추출해 복사 가능한 결과 창으로 표시 |
@@ -118,7 +119,7 @@ HKCU\Software\ScreenClipTool
 
 관리자가 선택형 `PL_Suite\ClipOCR` 연동을 활성화하면 캡처 동작과 사용자가 `Ctrl + S`로 명시 저장할 때의 기본 폴더를 중앙값에서 읽을 수 있습니다. 위 앱 전용 경로에 기존 값이 있으면 항상 우선하며, 앱은 Suite 레지스트리에 쓰지 않습니다. 번역 동의는 계속 앱 전용 경로에만 남고 중앙 폴더로 캡처를 자동 저장하지 않습니다.
 
-설정창 About 탭을 열면 GitHub 최신 릴리즈를 확인합니다. 새 버전이 있을 때만 `Download & Update` 버튼이 활성화됩니다. 사용자가 확인하면 공식 EXE를 임시 폴더에 다운로드하고, GitHub가 제공하는 파일 크기와 SHA-256 해시 및 실행 파일 버전을 검증한 뒤 현재 앱을 교체하고 재실행합니다. 업데이트 전에는 열려 있는 캡처 창을 저장하거나 복사해야 합니다. 소스 코드로 실행 중이거나 검증 가능한 EXE 자산이 없으면 릴리즈 페이지만 엽니다.
+설정창 About 탭을 열면 GitHub 최신 릴리즈를 확인합니다. 새 버전이 있을 때만 `Download & Update` 버튼이 활성화됩니다. 사용자가 확인하면 공식 EXE를 임시 폴더에 다운로드하고, GitHub가 제공하는 파일 크기와 SHA-256 해시 및 실행 파일 버전을 검증한 뒤 현재 앱을 교체하고 재실행합니다. 업데이트 전에는 열려 있는 캡처 창을 저장하거나 복사해야 합니다. 소스 코드로 실행 중이거나 검증 가능한 EXE 자산이 없으면 릴리즈 페이지만 엽니다. 처리되지 않은 런타임 오류는 `%TEMP%\ClipOCR-Pro\error.log`에 기록되어(256 KB에서 교체, 메시지·소스 위치·호출 스택만 포함) 지원 요청 시 첨부할 수 있습니다.
 
 모든 push와 pull request는 저장소 정책 검사와 해시가 고정된 공식 AutoHotkey/Ahk2Exe 도구로 Windows 빌드를 수행합니다. CI는 시험 산출물만 제공하며 릴리즈 쓰기 권한은 없습니다.
 
