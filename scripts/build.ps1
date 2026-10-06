@@ -134,6 +134,53 @@ function Find-SignTool {
     return $null
 }
 
+function Find-InnoSetupCompiler {
+    $onPath = Get-Command iscc.exe -ErrorAction SilentlyContinue
+    if ($null -ne $onPath) {
+        return $onPath.Source
+    }
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+        (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
+    )
+    foreach ($cand in $candidates) {
+        if (Test-Path -LiteralPath $cand -PathType Leaf) {
+            return $cand
+        }
+    }
+    return $null
+}
+
+function Invoke-FileSigning {
+    param(
+        [string]$TargetFilePath,
+        $SigningContext,
+        [string]$Description,
+        [string]$Timestamp,
+        [switch]$SkipTs,
+        [string]$Hint
+    )
+    if ($null -eq $SigningContext) { return }
+    if ($null -ne $SigningContext.SignTool) {
+        $signArgs = @("sign") + $SigningContext.Selector + @("/fd", "sha256", "/d", $Description)
+        if (-not $SkipTs) {
+            $signArgs += @("/tr", $Timestamp, "/td", "sha256")
+        }
+        $signArgs += $TargetFilePath
+        $null = Invoke-NativeChecked $SigningContext.SignTool $signArgs "signtool" -FailureHint $Hint
+    } else {
+        $signParams = @{ FilePath = $TargetFilePath; Certificate = $SigningContext.Certificate; HashAlgorithm = "SHA256" }
+        if (-not $SkipTs) {
+            $signParams.TimestampServer = $Timestamp
+        }
+        $cmdletResult = Set-AuthenticodeSignature @signParams
+        if ($cmdletResult.Status -eq "NotSigned" -or $cmdletResult.SignatureType -eq "None") {
+            throw "Set-AuthenticodeSignature could not sign with $($SigningContext.Certificate.Thumbprint): $($cmdletResult.Status) - $($cmdletResult.StatusMessage). $Hint"
+        }
+    }
+}
+
 if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
     throw "Could not find the application source: $sourcePath"
 }
@@ -323,23 +370,7 @@ $signingRecord = [ordered]@{
 }
 if ($null -ne $signing) {
     Write-Host "[3/5] Signing executable..."
-    if ($null -ne $signing.SignTool) {
-        $signArgs = @("sign") + $signing.Selector + @("/fd", "sha256", "/d", "ClipOCR-Pro")
-        if (-not $SkipTimestamp) {
-            $signArgs += @("/tr", $TimestampServer, "/td", "sha256")
-        }
-        $signArgs += $exePath
-        $null = Invoke-NativeChecked $signing.SignTool $signArgs "signtool" -FailureHint $tokenHint
-    } else {
-        $signParams = @{ FilePath = $exePath; Certificate = $signing.Certificate; HashAlgorithm = "SHA256" }
-        if (-not $SkipTimestamp) {
-            $signParams.TimestampServer = $TimestampServer
-        }
-        $cmdletResult = Set-AuthenticodeSignature @signParams
-        if ($cmdletResult.Status -eq "NotSigned" -or $cmdletResult.SignatureType -eq "None") {
-            throw "Set-AuthenticodeSignature could not sign with $($signing.Certificate.Thumbprint): $($cmdletResult.Status) - $($cmdletResult.StatusMessage). $tokenHint"
-        }
-    }
+    Invoke-FileSigning $exePath $signing "ClipOCR-Pro" $TimestampServer -SkipTs:$SkipTimestamp -Hint $tokenHint
     $signature = Get-AuthenticodeSignature -LiteralPath $exePath
     if ($null -eq $signature.SignerCertificate -or $signature.SignatureType -eq "None") {
         throw "Authenticode signing did not produce a signature. Status: $($signature.Status)"
@@ -373,15 +404,35 @@ if ($SkipCompiledHealthCheck) {
 Compress-Archive -LiteralPath $exePath -DestinationPath $zipPath -CompressionLevel Optimal
 
 $artifactPaths = [System.Collections.Generic.List[string]]::new()
-$artifactPaths.Add($exePath)
-$artifactPaths.Add($zipPath)
+
+# Build Per-User Windows Installer using Inno Setup
+$iscc = Find-InnoSetupCompiler
+if ($null -ne $iscc) {
+    Write-Host "  Building installer with Inno Setup ($iscc)..."
+    $setupIssPath = Join-Path $repoRoot "installer\setup.iss"
+    $isccArgs = @("/DMyAppVersion=$version", "/O$outputRoot", $setupIssPath)
+    $null = Invoke-NativeChecked $iscc $isccArgs "Inno Setup compilation"
+    $setupExePath = Join-Path $outputRoot "ClipOCR-Setup.v$version.exe"
+    if (Test-Path -LiteralPath $setupExePath -PathType Leaf) {
+        if ($null -ne $signing) {
+            Invoke-FileSigning $setupExePath $signing "ClipOCR-Pro Setup" $TimestampServer -SkipTs:$SkipTimestamp -Hint $tokenHint
+        }
+        $artifactPaths.Add($setupExePath)
+        if ($IncludeEnterpriseAliases) {
+            $enterpriseSetup = Join-Path $outputRoot "App03_ClipOCR-Setup_v$version.exe"
+            Copy-Item -LiteralPath $setupExePath -Destination $enterpriseSetup
+            $artifactPaths.Add($enterpriseSetup)
+        }
+    }
+} else {
+    Write-Warning "Inno Setup compiler (ISCC.exe) was not found; installer build skipped."
+}
+
 if ($IncludeEnterpriseAliases) {
     $enterpriseExe = Join-Path $outputRoot "App03_ClipOCR-Pro_v$version.exe"
     $enterpriseZip = Join-Path $outputRoot "App03_ClipOCR-Pro_v$version.zip"
     Copy-Item -LiteralPath $exePath -Destination $enterpriseExe
     Copy-Item -LiteralPath $zipPath -Destination $enterpriseZip
-    $artifactPaths.Add($enterpriseExe)
-    $artifactPaths.Add($enterpriseZip)
 }
 if ($null -ne $portableOcrRoot) {
     $fullStage = Join-Path $outputRoot ".full-stage-$([Diagnostics.Process]::GetCurrentProcess().Id)"

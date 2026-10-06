@@ -17,6 +17,7 @@ if (CLI_MODE != "")
 #Include SuiteRegistry.ahk
 #Include OcrService.ahk
 #Include HealthCheck.ahk
+#Include SettingsManager.ahk
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
@@ -271,73 +272,60 @@ global UPDATE_CHECK_STATE := { status: "idle", latestVersion: "", releaseUrl: GI
     downloadUrl: "", assetName: "", assetSize: 0, sha256: "", lastError: "", request: 0, startedTick: 0,
     statusCtrl: 0, detailCtrl: 0, updateBtn: 0, dashboardHwnd: 0 }
 
-try {
-    CLIP_WIDTH := NormalizeClipWidth(RegRead(REG_PATH, "ClipboardWidth"))
-} catch {
+; One-time migration: import legacy registry settings into UserSetting\config.ini if available.
+EnsureSettingsMigration()
+CleanLegacyShortcuts()
+
+if TryReadLocalSetting("ClipboardWidth", &savedWidth)
+    CLIP_WIDTH := NormalizeClipWidth(savedWidth)
+else
     CLIP_WIDTH := 1000
-}
 
-try {
-    COPY_OUTLINE_ENABLED := NormalizeCopyOutline(RegRead(REG_PATH, "CopyOutline"))
-} catch {
+if TryReadLocalSetting("CopyOutline", &savedOutline)
+    COPY_OUTLINE_ENABLED := NormalizeCopyOutline(savedOutline)
+else
     COPY_OUTLINE_ENABLED := true
-}
 
-try {
-    JPG_QUALITY := NormalizeJpegQuality(RegRead(REG_PATH, "JpegQuality"))
-} catch {
+if TryReadLocalSetting("JpegQuality", &savedQuality)
+    JPG_QUALITY := NormalizeJpegQuality(savedQuality)
+else
     JPG_QUALITY := 90
-}
 
-try {
-    SAVE_IMAGE_FORMAT := NormalizeSaveImageFormat(RegRead(REG_PATH, "SaveImageFormat"))
-} catch {
+if TryReadLocalSetting("SaveImageFormat", &savedFormat)
+    SAVE_IMAGE_FORMAT := NormalizeSaveImageFormat(savedFormat)
+else
     SAVE_IMAGE_FORMAT := "png"
-}
 
-try {
-    savedLang := RegRead(REG_PATH, "TranslateLang")
-    if IsTextTranslateLangSupported(savedLang)
-        TEXT_TRANSLATE_LANG := savedLang
-} catch {
+if (TryReadLocalSetting("TranslateLang", &savedLang) && IsTextTranslateLangSupported(savedLang))
+    TEXT_TRANSLATE_LANG := savedLang
+else
     TEXT_TRANSLATE_LANG := "ko"
-}
 
-try {
-    savedHotkey := RegRead(REG_PATH, "TranslateHotkey")
-    if IsTextTranslateHotkeySupported(savedHotkey)
-        TEXT_TRANSLATE_HOTKEY := savedHotkey
-} catch {
+if (TryReadLocalSetting("TranslateHotkey", &savedHotkey) && IsTextTranslateHotkeySupported(savedHotkey))
+    TEXT_TRANSLATE_HOTKEY := savedHotkey
+else
     TEXT_TRANSLATE_HOTKEY := "#CapsLock"
-}
 
-try {
-    TEXT_TRANSLATE_FONT_SIZE := NormalizeTextTranslateFontSize(RegRead(REG_PATH, "TextTranslateFontSize"))
-} catch {
+if TryReadLocalSetting("TextTranslateFontSize", &savedFontSize)
+    TEXT_TRANSLATE_FONT_SIZE := NormalizeTextTranslateFontSize(savedFontSize)
+else
     TEXT_TRANSLATE_FONT_SIZE := 10
-}
 
-try {
-    savedImageLangs := RegRead(REG_PATH, "ImageTranslateLangs")
+if TryReadLocalSetting("ImageTranslateLangs", &savedImageLangs)
     IMAGE_TRANSLATE_LANGS := NormalizeLangCodeList(savedImageLangs)
-} catch {
+else
     IMAGE_TRANSLATE_LANGS := NormalizeLangCodeList(IMAGE_TRANSLATE_LANGS)
-}
 
-try {
-    savedManualLang := RegRead(REG_PATH, "ManualLang")
-    if (savedManualLang == "ko" || savedManualLang == "en" || savedManualLang == "pl" || savedManualLang == "de" || savedManualLang == "fr" || savedManualLang == "es")
-        MANUAL_LANG := savedManualLang
-} catch {
+if (TryReadLocalSetting("ManualLang", &savedManualLang) && (savedManualLang == "ko" || savedManualLang == "en" || savedManualLang == "pl" || savedManualLang == "de" || savedManualLang == "fr" || savedManualLang == "es"))
+    MANUAL_LANG := savedManualLang
+else
     MANUAL_LANG := GetDefaultUILang()
-}
 
-try {
-    ; Privacy invariant: consent is app-owned and is never read from or written to PL_Suite.
-    TRANSLATE_CONSENT := (Trim(String(RegRead(REG_PATH, "TranslateConsent"))) == "1")
-} catch {
+if TryReadLocalSetting("TranslateConsent", &savedConsent)
+    TRANSLATE_CONSENT := (Trim(String(savedConsent)) == "1")
+else
     TRANSLATE_CONSENT := false
-}
+
 
 localSaveFound := TryReadLocalSetting("SaveFolder", &localSaveFolder)
 suiteSaveFound := false
@@ -991,25 +979,6 @@ SaveJpegBitmapToFile(pBitmap, filePath, quality := 85) {
         "UPtr", pCodec, "UPtr", encoderParams.Ptr)
 }
 
-SafeRegWriteString(value, regPath, valueName) {
-    try {
-        RegWrite(String(value), "REG_SZ", regPath, valueName)
-        return true
-    } catch {
-        return false
-    }
-}
-
-TryReadLocalSetting(valueName, &value) {
-    global REG_PATH
-    try {
-        value := RegRead(REG_PATH, valueName)
-        return true
-    } catch {
-        value := ""
-        return false
-    }
-}
 
 ShortErrorMessage(message, maxLen := 120) {
     message := Trim(String(message))
@@ -3886,6 +3855,26 @@ HasLegacyStartupRegistry() {
 DeleteLegacyStartupRegistry() {
     static regKey := "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
     try RegDelete(regKey, "ScreenClipTool")
+    try RegDelete(regKey, "ClipOCR-Pro")
+    try RegDelete(regKey, "ClipOCR")
+}
+
+CleanLegacyShortcuts() {
+    legacyPaths := [
+        A_Startup "\ScreenClipTool.lnk",
+        A_Startup "\App03_ClipOCR-Pro.lnk",
+        A_Desktop "\ScreenClipTool.lnk",
+        A_Desktop "\App03_ClipOCR-Pro.lnk",
+        A_Programs "\ScreenClipTool.lnk",
+        A_Programs "\ClipOCR-Pro.lnk"
+    ]
+    for p in legacyPaths {
+        try {
+            if FileExist(p)
+                FileDelete(p)
+        }
+    }
+    DeleteLegacyStartupRegistry()
 }
 
 IsStartupEnabled() {
@@ -3913,7 +3902,7 @@ EnableStartup() {
         if FileExist(linkPath)
             FileDelete(linkPath)
         FileCreateShortcut(targetPath, linkPath, A_ScriptDir, shortcutArgs, APP_NAME, iconPath)
-        DeleteLegacyStartupRegistry()
+        CleanLegacyShortcuts()
         return (FileExist(linkPath) != "")
     } catch {
         return false
@@ -3926,7 +3915,7 @@ DisableStartup() {
         if FileExist(linkPath)
             FileDelete(linkPath)
     }
-    DeleteLegacyStartupRegistry()
+    CleanLegacyShortcuts()
     return !IsStartupEnabled()
 }
 

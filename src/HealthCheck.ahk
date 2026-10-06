@@ -38,6 +38,11 @@ RunHealthCheckSuite(errors) {
     Check(() => IsCaptureHotkeySupported("Win+Drag") && IsCaptureHotkeySupported("#LButton")
         && !IsCaptureHotkeySupported("Alt+F4") && NormalizeCaptureHotkey("Alt+F4") == "#LButton",
         "capture hotkey validation")
+    Check(() => GetSettingSection("SaveImageFormat") == "Image"
+        && GetSettingSection("TranslateLang") == "Translation"
+        && GetSettingSection("OcrEngine") == "OCR"
+        && GetSettingSection("MigratedFromRegistry") == "System"
+        && GetSettingSection("SaveFolder") == "General", "SettingsManager section mapping")
     Check(() => IsTextTranslateHotkeySupported("#CapsLock") && IsTextTranslateHotkeySupported("^!CapsLock"),
         "translation hotkey validation")
     Check(() => IsValidTextTranslateFontSize(8) && IsValidTextTranslateFontSize(18)
