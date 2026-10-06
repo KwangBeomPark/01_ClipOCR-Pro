@@ -7,7 +7,7 @@
 ; so --health-check and --ocr-file never terminate a running tray instance.
 #SingleInstance Off
 ;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
-;@Ahk2Exe-SetVersion 1.6.0.0
+;@Ahk2Exe-SetVersion 1.6.1.0
 ; CLI modes exit before any window or hotkey exists and must never show a dialog: this runs before
 ; the includes and globals so an error anywhere in startup ends the process with a FAIL line.
 global CLI_MODE := (A_Args.Length > 0 && (A_Args[1] == "--health-check" || A_Args[1] == "--ocr-file")) ? A_Args[1] : ""
@@ -21,7 +21,7 @@ if (CLI_MODE != "")
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
-global APP_VERSION := "1.6.0"
+global APP_VERSION := "1.6.1"
 global APP_ICON_PATH := A_IsCompiled ? A_ScriptFullPath : A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global APP_SOURCE_ICON_PATH := A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global GITHUB_RELEASES_URL := "https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases"
@@ -3863,8 +3863,10 @@ CleanLegacyShortcuts() {
     legacyPaths := [
         A_Startup "\ScreenClipTool.lnk",
         A_Startup "\App03_ClipOCR-Pro.lnk",
+        A_Startup "\App01_ClipOCR-Pro.lnk",
         A_Desktop "\ScreenClipTool.lnk",
         A_Desktop "\App03_ClipOCR-Pro.lnk",
+        A_Desktop "\App01_ClipOCR-Pro.lnk",
         A_Programs "\ScreenClipTool.lnk",
         A_Programs "\ClipOCR-Pro.lnk"
     ]

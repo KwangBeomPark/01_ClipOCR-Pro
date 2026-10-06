@@ -39,7 +39,7 @@ It is designed especially for finance, accounting, sales administration, credit 
 ### 📥 For General Users (One-Click Portable Download)
 
 1. Go to the **[Releases](https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases)** tab on the right side of the GitHub repository.
-2. Download the latest Light **`ClipOCR-Pro.vX.Y.Z.zip`** or standalone EXE. Company deployments that need Korean OCR without a Windows Korean language pack can use **`App03_ClipOCR-Pro_vX.Y.Z-Full.zip`** when provided by their administrator.
+2. Download the latest Light **`ClipOCR-Pro.vX.Y.Z.zip`** or standalone EXE. Company deployments that need Korean OCR without a Windows Korean language pack can use **`App01_ClipOCR-Pro_vX.Y.Z-Full.zip`** when provided by their administrator.
 3. Unzip the file if needed, then double-click **`ClipOCR-Pro.exe`**.
 4. An icon will appear in the Windows system tray, and ClipOCR-Pro is ready to use.
 

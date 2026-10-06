@@ -212,7 +212,7 @@ $zipPath = Join-Path $outputRoot "$baseName.zip"
 $outputPaths = Get-BuildOutputPaths $outputRoot
 $manifestPath = $outputPaths.Manifest
 $checksumsPath = $outputPaths.Checksums
-$fullZipPath = Join-Path $outputRoot "App03_ClipOCR-Pro_v$version-Full.zip"
+$fullZipPath = Join-Path $outputRoot "App01_ClipOCR-Pro_v$version-Full.zip"
 $portableOcrRoot = $null
 $portableOcrVersion = ""
 if ([string]::IsNullOrWhiteSpace($TesseractDirectory) -and -not [string]::IsNullOrWhiteSpace($env:CLIPOCR_TESSERACT_DIR)) {
@@ -246,8 +246,8 @@ if ($null -ne $portableOcrRoot) {
     $targetArtifacts += $fullZipPath
 }
 if ($IncludeEnterpriseAliases) {
-    $targetArtifacts += Join-Path $outputRoot "App03_ClipOCR-Pro_v$version.exe"
-    $targetArtifacts += Join-Path $outputRoot "App03_ClipOCR-Pro_v$version.zip"
+    $targetArtifacts += Join-Path $outputRoot "App01_ClipOCR-Pro_v$version.exe"
+    $targetArtifacts += Join-Path $outputRoot "App01_ClipOCR-Pro_v$version.zip"
 }
 foreach ($target in $targetArtifacts) {
     if (Test-Path -LiteralPath $target -PathType Leaf) {
@@ -404,13 +404,15 @@ if ($SkipCompiledHealthCheck) {
 Compress-Archive -LiteralPath $exePath -DestinationPath $zipPath -CompressionLevel Optimal
 
 $artifactPaths = [System.Collections.Generic.List[string]]::new()
+$artifactPaths.Add($exePath)
+$artifactPaths.Add($zipPath)
 
 # Build Per-User Windows Installer using Inno Setup
 $iscc = Find-InnoSetupCompiler
 if ($null -ne $iscc) {
     Write-Host "  Building installer with Inno Setup ($iscc)..."
     $setupIssPath = Join-Path $repoRoot "installer\setup.iss"
-    $isccArgs = @("/DMyAppVersion=$version", "/O$outputRoot", $setupIssPath)
+    $isccArgs = @("/DMyAppVersion=$version", "/DMyAppExeSource=$exePath", "/O$outputRoot", $setupIssPath)
     $null = Invoke-NativeChecked $iscc $isccArgs "Inno Setup compilation"
     $setupExePath = Join-Path $outputRoot "ClipOCR-Setup.v$version.exe"
     if (Test-Path -LiteralPath $setupExePath -PathType Leaf) {
@@ -419,8 +421,8 @@ if ($null -ne $iscc) {
         }
         $artifactPaths.Add($setupExePath)
         if ($IncludeEnterpriseAliases) {
-            $enterpriseSetup = Join-Path $outputRoot "App03_ClipOCR-Setup_v$version.exe"
-            Copy-Item -LiteralPath $setupExePath -Destination $enterpriseSetup
+            $enterpriseSetup = Join-Path $outputRoot "App01_ClipOCR-Setup_v$version.exe"
+            Copy-Item -LiteralPath $setupExePath -Destination $enterpriseSetup -Force
             $artifactPaths.Add($enterpriseSetup)
         }
     }
@@ -429,10 +431,12 @@ if ($null -ne $iscc) {
 }
 
 if ($IncludeEnterpriseAliases) {
-    $enterpriseExe = Join-Path $outputRoot "App03_ClipOCR-Pro_v$version.exe"
-    $enterpriseZip = Join-Path $outputRoot "App03_ClipOCR-Pro_v$version.zip"
-    Copy-Item -LiteralPath $exePath -Destination $enterpriseExe
-    Copy-Item -LiteralPath $zipPath -Destination $enterpriseZip
+    $enterpriseExe = Join-Path $outputRoot "App01_ClipOCR-Pro_v$version.exe"
+    $enterpriseZip = Join-Path $outputRoot "App01_ClipOCR-Pro_v$version.zip"
+    Copy-Item -LiteralPath $exePath -Destination $enterpriseExe -Force
+    Copy-Item -LiteralPath $zipPath -Destination $enterpriseZip -Force
+    $artifactPaths.Add($enterpriseExe)
+    $artifactPaths.Add($enterpriseZip)
 }
 if ($null -ne $portableOcrRoot) {
     $fullStage = Join-Path $outputRoot ".full-stage-$([Diagnostics.Process]::GetCurrentProcess().Id)"

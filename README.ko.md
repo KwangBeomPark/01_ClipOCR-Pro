@@ -1,4 +1,4 @@
-﻿*다른 언어로 읽기: [English](README.md), [한국어](README.ko.md)*
+*다른 언어로 읽기: [English](README.md), [한국어](README.ko.md)*
 
 # 📸 ClipOCR-Pro 화면 캡처 및 번역 업무 자동화 도구
 AutoHotkey v2 기반의 포터블 화면 캡처, OCR, 선택 텍스트 번역, 이미지 업무 처리 도구입니다.
@@ -39,7 +39,7 @@ AutoHotkey v2 기반의 포터블 화면 캡처, OCR, 선택 텍스트 번역, �
 ### 📥 일반 사용자용 원클릭 다운로드 및 설치
 
 1. 깃허브 화면 우측의 **[Releases](https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases)** 탭으로 이동합니다.
-2. 최신 설치 파일인 **`ClipOCR-Setup.vX.Y.Z.exe`** (사내 배포 시 `App03_ClipOCR-Setup_vX.Y.Z.exe`)를 다운로드합니다.
+2. 최신 설치 파일인 **`ClipOCR-Setup.vX.Y.Z.exe`** (사내 배포 시 `App01_ClipOCR-Setup_vX.Y.Z.exe`)를 다운로드합니다.
 3. 다운로드한 설치 파일을 실행하여 설치를 완료합니다. (기본 설치 경로: `%LOCALAPPDATA%\Programs\ClipOCR`, 관리자 UAC 권한 불필요)
 4. 설치 즉시 바탕화면과 시작 메뉴에 바로가기가 생성되며, Windows 시스템 트레이에 아이콘이 표시되어 바로 사용할 수 있습니다.
 

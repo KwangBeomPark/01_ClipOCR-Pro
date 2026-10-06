@@ -1,8 +1,12 @@
-; Script for ClipOCR-Pro (PL Suite App03)
+; Script for ClipOCR-Pro (PL Suite App01)
 ; Standard Per-User installer for PL Suite applications (App01 ~ App10).
 
 #ifndef MyAppVersion
-#define MyAppVersion "1.6.0"
+#define MyAppVersion "1.6.1"
+#endif
+
+#ifndef MyAppExeSource
+#define MyAppExeSource "..\dist\ClipOCR-Pro.v" + MyAppVersion + ".exe"
 #endif
 
 #define MyAppName "ClipOCR-Pro"
@@ -42,7 +46,7 @@ Name: "startupicon"; Description: "Windows 시작 시 자동 실행 (Run at Wind
 
 [Files]
 ; Main application executable
-Source: "..\dist\ClipOCR-Pro.v{#MyAppVersion}.exe"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
+Source: "{#MyAppExeSource}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
 ; Optional OCR engine (included when full package is built)
 Source: "..\dist\ocr\*"; DestDir: "{app}\ocr"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
@@ -55,8 +59,10 @@ Name: "{app}\UserSetting"; Flags: uninsneveruninstall
 Type: files; Name: "{userstartup}\ClipOCR-Pro.lnk"
 Type: files; Name: "{userstartup}\ScreenClipTool.lnk"
 Type: files; Name: "{userstartup}\App03_ClipOCR-Pro.lnk"
+Type: files; Name: "{userstartup}\App01_ClipOCR-Pro.lnk"
 Type: files; Name: "{userdesktop}\ScreenClipTool.lnk"
 Type: files; Name: "{userdesktop}\App03_ClipOCR-Pro.lnk"
+Type: files; Name: "{userdesktop}\App01_ClipOCR-Pro.lnk"
 Type: files; Name: "{userprograms}\ScreenClipTool.lnk"
 Type: files; Name: "{userprograms}\ClipOCR-Pro.lnk"
 
