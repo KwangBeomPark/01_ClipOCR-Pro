@@ -109,6 +109,10 @@ function Find-SignTool {
     if ($null -ne $onPath) {
         return $onPath.Source
     }
+    $stepwiseSignTool = "C:\Dev\GitHub\06_Stepwise\release\build\signtool\signtool.exe"
+    if (Test-Path -LiteralPath $stepwiseSignTool -PathType Leaf) {
+        return $stepwiseSignTool
+    }
     $programFilesX86 = ${env:ProgramFiles(x86)}
     if ([string]::IsNullOrWhiteSpace($programFilesX86)) {
         return $null
