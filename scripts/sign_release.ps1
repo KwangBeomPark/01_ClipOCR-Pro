@@ -5,7 +5,7 @@
 param(
     [string]$CertificateThumbprint = "E9C72CF5090840A1805296525D56BE680622A7FD",
     [string]$TimestampServer = "http://time.certum.pl",
-    [string]$OutputDirectory = "dist"
+    [string]$OutputDirectory = "release"
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,7 +28,8 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 $signtool = $null
 $candidates = @(
     "C:\Dev\GitHub\06_Stepwise\release\build\signtool\signtool.exe",
-    (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin\x64\signtool.exe")
+    (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin\x64\signtool.exe"),
+    (Join-Path $env:ProgramFiles "Windows Kits\10\bin\x64\signtool.exe")
 )
 $onPath = Get-Command signtool.exe -ErrorAction SilentlyContinue
 if ($null -ne $onPath) {
@@ -50,7 +51,7 @@ Write-Host "Using signtool: $signtool" -ForegroundColor Cyan
 
 # 3. Locate Target Installer Binaries to Sign
 $setupFiles = @(Get-ChildItem -LiteralPath $targetDir -Filter "*Setup*.exe" | ForEach-Object { $_.FullName })
-$appFiles = @(Get-ChildItem -LiteralPath $targetDir -Filter "ClipOCR-Pro*.exe" | ForEach-Object { $_.FullName })
+$appFiles = @(Get-ChildItem -LiteralPath $targetDir -Filter "*ClipOCR*.exe" | ForEach-Object { $_.FullName })
 $filesToSign = @($setupFiles + $appFiles | Select-Object -Unique)
 
 if ($filesToSign.Count -eq 0) {
