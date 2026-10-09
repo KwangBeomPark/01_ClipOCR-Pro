@@ -6,7 +6,7 @@
 #endif
 
 #ifndef MyAppExeSource
-#define MyAppExeSource "..\dist\ClipOCR-Pro.v" + MyAppVersion + ".exe"
+#define MyAppExeSource "..\dist\App01_ClipOCR-Pro_v" + MyAppVersion + ".exe"
 #endif
 
 #define MyAppName "ClipOCR-Pro"
@@ -27,14 +27,17 @@ DefaultGroupName=ClipOCR
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\dist
-OutputBaseFilename=ClipOCR-Setup.v{#MyAppVersion}
+OutputBaseFilename=App01_ClipOCR-Pro_Setup_v{#MyAppVersion}
 SetupIconFile=..\assets\ClipOCR-Pro.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
+RestartApplications=no
 CloseApplicationsFilter=ClipOCR-Pro.exe
+VersionInfoVersion={#MyAppVersion}
+VersionInfoProductVersion={#MyAppVersion}
 
 [Languages]
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
@@ -46,7 +49,7 @@ Name: "startupicon"; Description: "Windows 시작 시 자동 실행 (Run at Wind
 
 [Files]
 ; Main application executable
-Source: "{#MyAppExeSource}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
+Source: "{#MyAppExeSource}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion; BeforeInstall: EnsureUpgradeReady
 ; Optional OCR engine (included when full package is built)
 Source: "..\dist\ocr\*"; DestDir: "{app}\ocr"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
@@ -79,3 +82,25 @@ Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: st
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[CustomMessages]
+english.UpgradeBlocked=Close ClipOCR-Pro and retry setup. The installed executable is still in use or cannot be replaced.
+korean.UpgradeBlocked=ClipOCR-Pro를 종료한 후 설치를 다시 실행하세요. 설치된 실행 파일이 사용 중이거나 교체할 수 없습니다.
+
+[Code]
+procedure EnsureUpgradeReady;
+var
+  Target: String;
+  Probe: TFileStream;
+begin
+  { BeforeInstall runs after Restart Manager, before copying the executable. }
+  Target := ExpandConstant('{app}\{#MyAppExeName}');
+  if not FileExists(Target) then Exit;
+  try
+    { Opening without writing also detects a mapped executable or denied access. }
+    Probe := TFileStream.Create(Target, fmOpenReadWrite or fmShareExclusive);
+    Probe.Free;
+  except
+    RaiseException(CustomMessage('UpgradeBlocked'));
+  end;
+end;

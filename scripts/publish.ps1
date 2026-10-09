@@ -10,11 +10,15 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "Common.ps1")
+. (Join-Path $PSScriptRoot "ReleaseSafety.ps1")
+if ($AllowUnsigned -or $AllowLegacyTimestamp) { throw 'Unsigned and legacy timestamp waivers are development-only; official publication cannot bypass verification.' }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $sourcePath = Join-Path $repoRoot "src\ClipOCR-Pro.ahk"
 $version = Get-AppVersion $sourcePath
 $tag = "v$version"
+$officialOutput = Resolve-RepoPath $repoRoot $OutputDirectory
+if ($officialOutput -ne (Join-Path $repoRoot 'release')) { throw 'Official publication uses the repository release directory; development builds belong in dist/build.' }
 
 foreach ($tool in @("git", "gh")) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
@@ -43,20 +47,19 @@ try {
         throw "Could not resolve HEAD."
     }
 
-    $null = Invoke-NativeChecked gh @("auth", "status") "GitHub CLI authentication" -Quiet -FailureHint "Run 'gh auth login'."
+    $repository = 'KwangBeomPark/01_ClipOCR-Pro'
+    $ghRepository = "github.com/$repository"
+    Assert-SuiteOrigin $repoRoot $repository
+    $remoteMain = Invoke-Git $repoRoot @('ls-remote', 'origin', 'refs/heads/main') -Checked
+    if ($remoteMain.StdOut.Count -ne 1 -or $remoteMain.StdOut[0] -notmatch "^$targetCommit\s+refs/heads/main$") { throw 'Push the reviewed source commit to origin/main before publication. This script never pushes.' }
 
-    # Fail closed: a failed query must never be mistaken for "no release yet".
-    $releaseQuery = Invoke-NativeChecked gh @("release", "list", "--limit", "1000", "--json", "tagName,isDraft") "GitHub release query" -Quiet
-    # Piping through ForEach-Object flattens the single array object Windows PowerShell 5.1 emits.
-    $releases = @()
-    $releaseJson = $releaseQuery.StdOut -join "`n"
-    if ($releaseJson) {
-        $releases = @(ConvertFrom-Json $releaseJson | ForEach-Object { $_ })
-    }
-    $existingRelease = @($releases | Where-Object { $_.tagName -eq $tag })
-    if ($existingRelease.Count -gt 0) {
-        if ($existingRelease[0].isDraft) {
-            throw "A draft release $tag already exists (probably a failed earlier publish). Review it, then run 'gh release delete $tag --yes' and retry."
+    $null = Invoke-NativeChecked gh @("auth", "status", "--hostname", "github.com") "GitHub CLI authentication" -Quiet -FailureHint "Run 'gh auth login'."
+
+    # A fully paginated successful query includes drafts and fails closed.
+    $existingRelease = Get-SuiteRemoteRelease $repository $tag
+    if ($existingRelease) {
+        if ($existingRelease.draft) {
+            throw "A draft release $tag already exists. Preserve it and review its verified assets before manually completing it, or choose a new version."
         }
         throw "GitHub release $tag already exists. Bump APP_VERSION instead of replacing it."
     }
@@ -73,54 +76,18 @@ try {
         }
     }
     if ($null -ne $remoteTagCommit -and $remoteTagCommit -ne $targetCommit) {
-        throw "Tag $tag already exists on origin at $remoteTagCommit, not at HEAD ($targetCommit). Move or delete the tag before publishing."
+        throw "Tag $tag already exists on origin at $remoteTagCommit, not at HEAD ($targetCommit). Preserve it and choose a new version."
     }
 
-    & (Join-Path $PSScriptRoot "build.ps1") -OutputDirectory $OutputDirectory -IncludeEnterpriseAliases
-
-    $outputRoot = Resolve-RepoPath $repoRoot $OutputDirectory
+    # Publication consumes the exact already-reviewed signed set. It never builds or signs.
+    $outputRoot = $officialOutput
+    $sourceDigest = Get-SuiteSourceDigest $repoRoot
+    $null = Assert-SuiteRelease $outputRoot $version $targetCommit $sourceDigest -RequireClean
     $outputPaths = Get-BuildOutputPaths $outputRoot
     $manifestPath = $outputPaths.Manifest
     $checksumsPath = $outputPaths.Checksums
     $manifestData = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-    # Each gate records its waiver where it is granted, so the release notes list exactly what was waived.
     $waivers = @()
-    if ($manifestData.compiledHealthCheck -ne "passed") {
-        throw "The compiled health check was '$($manifestData.compiledHealthCheck)' for this build; only builds whose compiled health check passed can be published."
-    }
-    if (-not $manifestData.signed) {
-        if (-not $AllowUnsigned) {
-            throw "Release is unsigned. Set CLIPOCR_SIGN_CERT_THUMBPRINT (certificate in the Windows store, e.g. Certum card or SimplySign) and CLIPOCR_TIMESTAMP_SERVER, or explicitly pass -AllowUnsigned."
-        }
-        $waivers += "-AllowUnsigned"
-    } else {
-        # A signed public release must come from the store-backed release certificate (never the
-        # development PFX path), be issued by the release CA (a self-issued test certificate that happens
-        # to be trusted locally is rejected), verify, and carry an RFC 3161 timestamp.
-        if ($manifestData.signingMethod -notlike "store-*") {
-            throw "The build was signed via '$($manifestData.signingMethod)', not the store-backed release certificate (CLIPOCR_SIGN_CERT_THUMBPRINT); PFX signing is the development fallback."
-        }
-        $expectedIssuerPattern = if ($env:CLIPOCR_RELEASE_SIGNER_ISSUER) { $env:CLIPOCR_RELEASE_SIGNER_ISSUER } else { "CN=Certum Code Signing*" }
-        if ($manifestData.signerSubject -eq $manifestData.signerIssuer) {
-            throw "The signer '$($manifestData.signerSubject)' is self-issued; public releases must be signed by the CA-issued release certificate."
-        }
-        if ($manifestData.signerIssuer -notlike $expectedIssuerPattern) {
-            throw "The signer was issued by '$($manifestData.signerIssuer)', which does not match the expected release CA pattern '$expectedIssuerPattern' (set CLIPOCR_RELEASE_SIGNER_ISSUER if the CA legitimately changed)."
-        }
-        if ($manifestData.signatureStatus -ne "Valid") {
-            throw "The signature status is '$($manifestData.signatureStatus)', not 'Valid': the certificate chain is not trusted on this machine. Install the CA's intermediate/root certificates and rebuild."
-        }
-        if ($manifestData.timestampType -eq "none") {
-            throw "The signature is not timestamped; set CLIPOCR_TIMESTAMP_SERVER and rebuild."
-        }
-        if ($manifestData.timestampType -ne "rfc3161") {
-            if (-not $AllowLegacyTimestamp) {
-                throw "The signature carries a '$($manifestData.timestampType)' timestamp, not RFC 3161. Install the Windows SDK signing tools (signtool.exe) or set CLIPOCR_SIGNTOOL_PATH and rebuild, or explicitly pass -AllowLegacyTimestamp."
-            }
-            $waivers += "-AllowLegacyTimestamp"
-        }
-    }
-
     $assets = @($manifestData.artifacts | ForEach-Object { Join-Path $outputRoot $_.name })
     $assets += $manifestPath
     $assets += $checksumsPath
@@ -151,29 +118,30 @@ try {
     $notesPath = [IO.Path]::GetTempFileName()
     [IO.File]::WriteAllText($notesPath, (($notesLines -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
 
-    $action = "push main and create immutable GitHub release $tag at $targetCommit"
-    if (-not $PSCmdlet.ShouldProcess("origin/main", $action)) {
+    $action = "create immutable GitHub release $tag at verified commit $targetCommit"
+    if (-not $PSCmdlet.ShouldProcess($repository, $action)) {
         return
     }
-
-    if (-not $NoPush) {
-        $null = Invoke-NativeChecked git @("push", "origin", "main") "git push origin main"
-    }
-
+    if ((Get-GitHeadCommit $repoRoot) -ne $targetCommit -or (Test-GitWorkingTreeDirty $repoRoot) -ne $false -or (Get-SuiteSourceDigest $repoRoot) -ne $sourceDigest) { throw 'Source changed after build verification; publication refused.' }
     # Create the release as a draft so a failed asset upload never leaves a public, half-populated
     # release behind; publishing is the final step and is what creates the tag at the target commit.
     $createArgs = @("release", "create", $tag) + $assets + @(
         "--draft",
+        "--repo", $ghRepository,
         "--target", $targetCommit,
         "--title", $tag,
         "--notes-file", $notesPath
     )
-    $null = Invoke-NativeChecked gh $createArgs "GitHub release creation" -FailureHint "If a draft $tag was left behind, run 'gh release delete $tag --yes' before retrying."
+    $null = Invoke-NativeChecked gh $createArgs "GitHub release creation" -FailureHint "If a draft was left behind, preserve and review it. Retry only missing verified assets or select a new version; never delete or overwrite existing release assets."
+    $verifiedRemote = Get-SuiteRemoteRelease $repository $tag
+    if (-not $verifiedRemote -or $verifiedRemote.tag_name -ne $tag -or @(Get-SuiteMissingAssets $assets $verifiedRemote.assets).Count -ne 0) { throw 'Remote assets are incomplete. Preserve the draft and compare the verified local set before recovery.' }
     if ($Draft) {
         Write-Host "Draft release $tag is ready at $targetCommit; publish it from GitHub when appropriate."
         return
     }
-    $null = Invoke-NativeChecked gh @("release", "edit", $tag, "--draft=false") "Publishing draft $tag" -FailureHint "Assets were uploaded; retry with: gh release edit $tag --draft=false"
+    $null = Invoke-NativeChecked gh @("release", "edit", $tag, "--draft=false", "--repo", $ghRepository) "Publishing draft $tag" -FailureHint "Assets were uploaded; preserve and review the draft before manually completing publication."
+    $published = Get-SuiteRemoteRelease $repository $tag
+    if (-not $published -or $published.draft -ne $false -or @(Get-SuiteMissingAssets $assets $published.assets).Count -ne 0) { throw 'Public release state or assets could not be verified. Preserve the existing release.' }
 
     Write-Host "Published $tag at $targetCommit"
 } finally {

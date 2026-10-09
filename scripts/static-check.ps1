@@ -20,6 +20,9 @@ function Assert-Project {
 
 foreach ($scriptPath in @(
     (Join-Path $PSScriptRoot "Common.ps1"),
+    (Join-Path $PSScriptRoot "ReleaseSafety.ps1"),
+    (Join-Path $PSScriptRoot "release.ps1"),
+    (Join-Path $PSScriptRoot "sign_release.ps1"),
     (Join-Path $PSScriptRoot "normalize-eol.ps1"),
     (Join-Path $PSScriptRoot "build.ps1"),
     (Join-Path $PSScriptRoot "publish.ps1"),

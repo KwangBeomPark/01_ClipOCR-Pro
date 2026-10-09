@@ -1,0 +1,13 @@
+{
+  "appId": "App01_ClipOCR",
+  "displayName": "ClipOCR-Pro",
+  "installFolder": "ClipOCR",
+  "executableNames": [
+    "ClipOCR-Pro.exe"
+  ],
+  "optionalDataFolders": [],
+  "externalData": [
+    "Capture output folder",
+    "External Tesseract runtime and tessdata"
+  ]
+}

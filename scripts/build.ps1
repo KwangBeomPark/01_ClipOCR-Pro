@@ -21,8 +21,17 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "Common.ps1")
+. (Join-Path $PSScriptRoot "ReleaseSafety.ps1")
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$requestedOutput = Resolve-RepoPath $repoRoot $OutputDirectory
+Assert-SuiteWorkspacePath $repoRoot $requestedOutput
+$allowedOutput = $false
+foreach ($folder in @('build', 'dist', 'out')) {
+    $allowedRoot = Join-Path $repoRoot $folder
+    if ($requestedOutput -eq $allowedRoot -or $requestedOutput.StartsWith(($allowedRoot + '\'), [StringComparison]::OrdinalIgnoreCase)) { $allowedOutput = $true }
+}
+if (-not $allowedOutput) { throw 'Local build output must be inside build, dist or out. Use release.ps1 for official promotion.' }
 $sourcePath = Join-Path $repoRoot "src\ClipOCR-Pro.ahk"
 $iconPath = Join-Path $repoRoot "assets\ClipOCR-Pro.ico"
 
@@ -109,10 +118,8 @@ function Find-SignTool {
     if ($null -ne $onPath) {
         return $onPath.Source
     }
-    $stepwiseSignTool = "C:\Dev\GitHub\06_Stepwise\release\build\signtool\signtool.exe"
-    if (Test-Path -LiteralPath $stepwiseSignTool -PathType Leaf) {
-        return $stepwiseSignTool
-    }
+    $localSignTool = Join-Path $repoRoot 'tools\signtool\signtool.exe'
+    if (Test-Path -LiteralPath $localSignTool -PathType Leaf) { return $localSignTool }
     $programFilesX86 = ${env:ProgramFiles(x86)}
     if ([string]::IsNullOrWhiteSpace($programFilesX86)) {
         return $null
@@ -210,13 +217,13 @@ if ($null -eq $sourceCommit -or $null -eq $sourceTreeDirty) {
 $outputRoot = Resolve-RepoPath $repoRoot $OutputDirectory
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 
-$baseName = "ClipOCR-Pro.v$version"
+$baseName = "App01_ClipOCR-Pro_v$version"
 $exePath = Join-Path $outputRoot "$baseName.exe"
 $zipPath = Join-Path $outputRoot "$baseName.zip"
 $outputPaths = Get-BuildOutputPaths $outputRoot
 $manifestPath = $outputPaths.Manifest
 $checksumsPath = $outputPaths.Checksums
-$fullZipPath = Join-Path $outputRoot "App01_ClipOCR-Pro_v$version-Full.zip"
+$fullZipPath = ''
 $portableOcrRoot = $null
 $portableOcrVersion = ""
 if ([string]::IsNullOrWhiteSpace($TesseractDirectory) -and -not [string]::IsNullOrWhiteSpace($env:CLIPOCR_TESSERACT_DIR)) {
@@ -246,9 +253,6 @@ if (-not [string]::IsNullOrWhiteSpace($TesseractDirectory)) {
     }
 }
 $targetArtifacts = @($exePath, $zipPath, $manifestPath, $checksumsPath)
-if ($null -ne $portableOcrRoot) {
-    $targetArtifacts += $fullZipPath
-}
 if ($IncludeEnterpriseAliases) {
     $targetArtifacts += Join-Path $outputRoot "App01_ClipOCR-Pro_v$version.exe"
     $targetArtifacts += Join-Path $outputRoot "App01_ClipOCR-Pro_v$version.zip"
@@ -348,6 +352,12 @@ if ($applicationControlEnforced) {
 }
 
 Write-Host "[1/5] Running source health check..."
+$null = Invoke-NativeChecked powershell.exe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'static-check.ps1')) 'Static checks'
+$null = Invoke-NativeChecked powershell.exe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $repoRoot 'tests\Test-ReleaseSafety.ps1')) 'Release safety tests'
+$null = Invoke-NativeChecked powershell.exe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'test_user_data_backup.ps1')) 'User data backup tests'
+$null = Invoke-NativeChecked $ahkExe @('/ErrorStdOut', (Join-Path $repoRoot 'tests\AtomicSettingsTests.ahk')) 'Atomic settings tests'
+$null = Invoke-NativeChecked powershell.exe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $repoRoot 'tests\Test-FullOcrPackaging.ps1')) 'Optional Full OCR packaging tests'
+$sourceDigest = Get-SuiteSourceDigest $repoRoot
 Invoke-HealthCheck $ahkExe @("/ErrorStdOut", $sourcePath, "--health-check") "Source health check"
 
 Write-Host "[2/5] Compiling $baseName.exe..."
@@ -405,58 +415,40 @@ if ($SkipCompiledHealthCheck) {
     Write-Host "[4/5] Running compiled health check and creating archives..."
     Invoke-HealthCheck $exePath @("--health-check") "Compiled health check"
 }
-Compress-Archive -LiteralPath $exePath -DestinationPath $zipPath -CompressionLevel Optimal
-
-$artifactPaths = [System.Collections.Generic.List[string]]::new()
-$artifactPaths.Add($exePath)
-$artifactPaths.Add($zipPath)
-
 # Build Per-User Windows Installer using Inno Setup
+$artifactPaths = [System.Collections.Generic.List[string]]::new()
 $iscc = Find-InnoSetupCompiler
 if ($null -ne $iscc) {
     Write-Host "  Building installer with Inno Setup ($iscc)..."
     $setupIssPath = Join-Path $repoRoot "installer\setup.iss"
     $isccArgs = @("/DMyAppVersion=$version", "/DMyAppExeSource=$exePath", "/O$outputRoot", $setupIssPath)
     $null = Invoke-NativeChecked $iscc $isccArgs "Inno Setup compilation"
-    $setupExePath = Join-Path $outputRoot "ClipOCR-Setup.v$version.exe"
+    $setupExePath = Join-Path $outputRoot "App01_ClipOCR-Pro_Setup_v$version.exe"
+    $legacySetup = Join-Path $outputRoot "ClipOCR-Setup.v$version.exe"
+    if (Test-Path -LiteralPath $legacySetup) {
+        Remove-Item -LiteralPath $legacySetup -Force -ErrorAction SilentlyContinue
+    }
     if (Test-Path -LiteralPath $setupExePath -PathType Leaf) {
         if ($null -ne $signing) {
             Invoke-FileSigning $setupExePath $signing "ClipOCR-Pro Setup" $TimestampServer -SkipTs:$SkipTimestamp -Hint $tokenHint
         }
         $artifactPaths.Add($setupExePath)
-        if ($IncludeEnterpriseAliases) {
-            $enterpriseSetup = Join-Path $outputRoot "App01_ClipOCR-Setup_v$version.exe"
-            Copy-Item -LiteralPath $setupExePath -Destination $enterpriseSetup -Force
-            $artifactPaths.Add($enterpriseSetup)
-        }
     }
 } else {
     Write-Warning "Inno Setup compiler (ISCC.exe) was not found; installer build skipped."
 }
 
-if ($IncludeEnterpriseAliases) {
-    $enterpriseExe = Join-Path $outputRoot "App01_ClipOCR-Pro_v$version.exe"
-    $enterpriseZip = Join-Path $outputRoot "App01_ClipOCR-Pro_v$version.zip"
-    Copy-Item -LiteralPath $exePath -Destination $enterpriseExe -Force
-    Copy-Item -LiteralPath $zipPath -Destination $enterpriseZip -Force
-    $artifactPaths.Add($enterpriseExe)
-    $artifactPaths.Add($enterpriseZip)
-}
+# Preserve the optional local package while its verified executable still exists.
 if ($null -ne $portableOcrRoot) {
-    $fullStage = Join-Path $outputRoot ".full-stage-$([Diagnostics.Process]::GetCurrentProcess().Id)"
-    if (Test-Path -LiteralPath $fullStage) {
-        Remove-Item -LiteralPath $fullStage -Recurse -Force
-    }
-    try {
-        New-Item -ItemType Directory -Path $fullStage | Out-Null
-        Copy-Item -LiteralPath $exePath -Destination (Join-Path $fullStage "ClipOCR-Pro.exe")
-        Copy-Item -LiteralPath $portableOcrRoot -Destination (Join-Path $fullStage "ocr") -Recurse
-        Compress-Archive -Path (Join-Path $fullStage "*") -DestinationPath $fullZipPath -CompressionLevel Optimal
-        $artifactPaths.Add($fullZipPath)
-    } finally {
-        if (Test-Path -LiteralPath $fullStage) {
-            Remove-Item -LiteralPath $fullStage -Recurse -Force
-        }
+    $fullZipPath = New-SuiteFullOcrPackage $repoRoot $exePath $portableOcrRoot $version
+    Write-Host "Optional local Full OCR package retained: $fullZipPath"
+}
+
+# Keep the official set installer-only. App bytes are already embedded in the installer.
+foreach ($legacyFile in @("ClipOCR-Setup.v$version.exe", "ClipOCR-Pro.v$version.exe", "ClipOCR-Pro.v$version.zip", "App01_ClipOCR-Pro_v$version.exe", "App01_ClipOCR-Pro_v$version.zip", (Split-Path -Leaf $exePath), (Split-Path -Leaf $zipPath))) {
+    $lp = Join-Path $outputRoot $legacyFile
+    if (Test-Path -LiteralPath $lp) {
+        Remove-Item -LiteralPath $lp -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -468,6 +460,7 @@ $artifactInfo = foreach ($path in $artifactPaths) {
         name   = $item.Name
         bytes  = $item.Length
         sha256 = $hash
+        signature = $(if ($signingRecord.signed -and $signingRecord.timestampType -eq 'rfc3161' -and $signingRecord.signatureStatus -eq 'Valid' -and $path.EndsWith('.exe')) { Assert-SuiteSignature $path } else { $null })
     }
 }
 # .NET writers are used because Windows PowerShell 5.1 has no BOM-less UTF-8 -Encoding value.
@@ -476,12 +469,14 @@ $checksumLines = @($artifactInfo | ForEach-Object { "$($_.sha256)  $($_.name)" }
 [IO.File]::WriteAllText($checksumsPath, (($checksumLines -join "`n") + "`n"), $utf8NoBom)
 
 $manifest = [ordered]@{
+    schemaVersion    = 2
     application      = "ClipOCR-Pro"
     version          = $version
     fileVersion      = $expectedFileVersion
     commit           = $sourceCommit
     workingTreeDirty = $sourceTreeDirty
     builtAtUtc       = [DateTime]::UtcNow.ToString("o")
+    provenance       = [ordered]@{ commit = $sourceCommit; workingTreeDirty = $sourceTreeDirty; sourceDigest = $sourceDigest; testsPassed = ($compiledHealthCheck -eq 'passed'); testGate = 'source health + compiled health + static checks + release safety'; testedAtUtc = [DateTime]::UtcNow.ToString('o') }
 }
 foreach ($key in $signingRecord.Keys) {
     $manifest[$key] = $signingRecord[$key]
@@ -490,6 +485,7 @@ $manifest.compiledHealthCheck = $compiledHealthCheck
 $manifest.fullOcrPackage = ($null -ne $portableOcrRoot)
 $manifest.portableOcrVersion = $portableOcrVersion
 $manifest.artifacts = @($artifactInfo)
+if ($sourceDigest -ne (Get-SuiteSourceDigest $repoRoot) -or $sourceCommit -ne (Get-GitHeadCommit $repoRoot)) { throw 'Source changed during the build. Official promotion is prohibited.' }
 [IO.File]::WriteAllText($manifestPath, (($manifest | ConvertTo-Json -Depth 5) + "`n"), $utf8NoBom)
 
 Write-Host "Build complete: $outputRoot"

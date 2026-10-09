@@ -7,7 +7,7 @@
 ; so --health-check and --ocr-file never terminate a running tray instance.
 #SingleInstance Off
 ;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
-;@Ahk2Exe-SetVersion 1.6.1.0
+;@Ahk2Exe-SetVersion 1.6.2.0
 ; CLI modes exit before any window or hotkey exists and must never show a dialog: this runs before
 ; the includes and globals so an error anywhere in startup ends the process with a FAIL line.
 global CLI_MODE := (A_Args.Length > 0 && (A_Args[1] == "--health-check" || A_Args[1] == "--ocr-file")) ? A_Args[1] : ""
@@ -21,7 +21,7 @@ if (CLI_MODE != "")
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
-global APP_VERSION := "1.6.1"
+global APP_VERSION := "1.6.2"
 global APP_ICON_PATH := A_IsCompiled ? A_ScriptFullPath : A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global APP_SOURCE_ICON_PATH := A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global GITHUB_RELEASES_URL := "https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases"
@@ -273,7 +273,11 @@ global UPDATE_CHECK_STATE := { status: "idle", latestVersion: "", releaseUrl: GI
     statusCtrl: 0, detailCtrl: 0, updateBtn: 0, dashboardHwnd: 0 }
 
 ; One-time migration: import legacy registry settings into UserSetting\config.ini if available.
-EnsureSettingsMigration()
+try EnsureSettingsMigration()
+catch Error as err {
+    MsgBox("Settings migration could not be completed. Your existing settings were preserved.`nCheck that the settings folder is writable, then restart ClipOCR-Pro.`n`n" err.Message, "Settings Migration Failed", 262160)
+    ExitApp()
+}
 CleanLegacyShortcuts()
 
 if TryReadLocalSetting("ClipboardWidth", &savedWidth)
@@ -899,26 +903,30 @@ SetSaveFolder(folder) {
     global SAVE_FOLDER, SAVE_FOLDER_SOURCE, REG_PATH
     folder := Trim(String(folder))
     ; Store the Desktop path as empty so the default keeps following the user's Desktop.
-    if (folder == "" || folder == A_Desktop)
-        SAVE_FOLDER := ""
-    else
-        SAVE_FOLDER := folder
-    if !SafeRegWriteString(SAVE_FOLDER, REG_PATH, "SaveFolder")
+    value := (folder == "" || folder == A_Desktop) ? "" : folder
+    if !SafeRegWriteString(value, REG_PATH, "SaveFolder")
         return false
+    SAVE_FOLDER := value
     SAVE_FOLDER_SOURCE := "local"
     return true
 }
 
 SetAutoClipboard(enabled) {
     global AUTO_CLIPBOARD, REG_PATH
-    AUTO_CLIPBOARD := !!enabled
-    return SafeRegWriteString(AUTO_CLIPBOARD ? 1 : 0, REG_PATH, "AutoClipboard")
+    value := !!enabled
+    if !SafeRegWriteString(value ? 1 : 0, REG_PATH, "AutoClipboard")
+        return false
+    AUTO_CLIPBOARD := value
+    return true
 }
 
 SetOcrEngine(engine) {
     global OCR_ENGINE, REG_PATH
-    OCR_ENGINE := NormalizeOcrEngine(engine)
-    return SafeRegWriteString(OCR_ENGINE, REG_PATH, "OcrEngine")
+    value := NormalizeOcrEngine(engine)
+    if !SafeRegWriteString(value, REG_PATH, "OcrEngine")
+        return false
+    OCR_ENGINE := value
+    return true
 }
 
 SetOcrLanguages(languages) {
@@ -926,8 +934,10 @@ SetOcrLanguages(languages) {
     normalized := NormalizeOcrLanguages(languages)
     if (normalized == "")
         return false
+    if !SafeRegWriteString(normalized, REG_PATH, "OcrLanguages")
+        return false
     OCR_LANGUAGES := normalized
-    return SafeRegWriteString(OCR_LANGUAGES, REG_PATH, "OcrLanguages")
+    return true
 }
 
 SafeSaveBitmapToFile(pBitmap, filePath, quality := 75) {
@@ -1327,8 +1337,9 @@ EnsureTranslationConsent() {
         return false
 
     TRANSLATE_CONSENT := true
-    ; Privacy invariant: consent remains in the app-owned registry path, never PL_Suite.
-    SafeRegWriteString(1, REG_PATH, "TranslateConsent")
+    ; Consent is app-local; a failed save still permits this explicitly approved session.
+    if !SafeRegWriteString(1, REG_PATH, "TranslateConsent")
+        MsgBox("Translation consent could not be saved. You will be asked again after restarting the app.", APP_NAME, 262160)
     return true
 }
 
@@ -2548,28 +2559,39 @@ UriEncode(Uri) {
 SetClipWidth(width) {
     global CLIP_WIDTH, REG_PATH
     width := NormalizeClipWidth(width)
-    CLIP_WIDTH := width
     saved := SafeRegWriteString(width, REG_PATH, "ClipboardWidth")
+    if !saved
+        return false
+    CLIP_WIDTH := width
     UpdateWidthMenu()
     return saved
 }
 
 SetCopyOutline(enabled) {
     global COPY_OUTLINE_ENABLED, REG_PATH
-    COPY_OUTLINE_ENABLED := enabled ? true : false
-    return SafeRegWriteString(COPY_OUTLINE_ENABLED ? 1 : 0, REG_PATH, "CopyOutline")
+    value := enabled ? true : false
+    if !SafeRegWriteString(value ? 1 : 0, REG_PATH, "CopyOutline")
+        return false
+    COPY_OUTLINE_ENABLED := value
+    return true
 }
 
 SetJpegQuality(quality) {
     global JPG_QUALITY, REG_PATH
-    JPG_QUALITY := NormalizeJpegQuality(quality)
-    return SafeRegWriteString(JPG_QUALITY, REG_PATH, "JpegQuality")
+    value := NormalizeJpegQuality(quality)
+    if !SafeRegWriteString(value, REG_PATH, "JpegQuality")
+        return false
+    JPG_QUALITY := value
+    return true
 }
 
 SetSaveImageFormat(format) {
     global SAVE_IMAGE_FORMAT, REG_PATH
-    SAVE_IMAGE_FORMAT := NormalizeSaveImageFormat(format)
-    return SafeRegWriteString(SAVE_IMAGE_FORMAT, REG_PATH, "SaveImageFormat")
+    value := NormalizeSaveImageFormat(format)
+    if !SafeRegWriteString(value, REG_PATH, "SaveImageFormat")
+        return false
+    SAVE_IMAGE_FORMAT := value
+    return true
 }
 
 BindImageSavePreset(presetIndex) {
@@ -2728,15 +2750,19 @@ SetTextTranslateLang(lang) {
     global TEXT_TRANSLATE_LANG, REG_PATH
     if !IsTextTranslateLangSupported(lang)
         lang := "ko"
+    if !SafeRegWriteString(lang, REG_PATH, "TranslateLang")
+        return false
     TEXT_TRANSLATE_LANG := lang
-    return SafeRegWriteString(lang, REG_PATH, "TranslateLang")
+    return true
 }
 
 SetTextTranslateFontSize(fontSize) {
     global TEXT_TRANSLATE_FONT_SIZE, REG_PATH
     fontSize := NormalizeTextTranslateFontSize(fontSize)
+    if !SafeRegWriteString(fontSize, REG_PATH, "TextTranslateFontSize")
+        return false
     TEXT_TRANSLATE_FONT_SIZE := fontSize
-    return SafeRegWriteString(fontSize, REG_PATH, "TextTranslateFontSize")
+    return true
 }
 
 GetTextTranslateHotkeyOptions() {
@@ -2820,6 +2846,12 @@ SetTextTranslateHotkey(hotkey) {
     }
 
     saved := SafeRegWriteString(hotkey, REG_PATH, "TranslateHotkey")
+    if !saved && oldHotkey != hotkey {
+        if hotkey != "#CapsLock"
+            try Hotkey(hotkey, "Off")
+        TEXT_TRANSLATE_HOTKEY := oldHotkey
+        try ApplyTextTranslateHotkey()
+    }
     UpdateTrayTextTranslateMenuLabel()
     return saved
 }
@@ -3017,6 +3049,10 @@ DownloadAndInstallGithubUpdate(*) {
         validationError := ValidateDownloadedUpdate(stagedPath, UPDATE_CHECK_STATE)
         if (validationError != "")
             throw Error(validationError)
+        if (InStr(UPDATE_CHECK_STATE.assetName, "Setup")) {
+            Run(stagedPath)
+            ExitApp
+        }
         if !LaunchUpdateHelper(stagedPath, A_ScriptFullPath, UPDATE_CHECK_STATE.sha256)
             throw Error("Could not start the update helper.")
         ExitApp
@@ -3068,27 +3104,37 @@ ParseGithubLatestRelease(jsonText) {
 }
 
 FindGithubReleaseAsset(jsonText, version) {
-    expectedName := "ClipOCR-Pro.v" version ".exe"
     escapedVersion := StrReplace(version, ".", "\.")
-    assetPattern := '"name"\s*:\s*"ClipOCR-Pro\.v' escapedVersion '\.exe"'
-    assetPos := RegExMatch(jsonText, assetPattern)
-    if !assetPos
-        return 0
+    candidateNames := [
+        "App01_ClipOCR-Pro_Setup_v" version ".exe",
+        "App01_ClipOCR-Setup_v" version ".exe",
+        "ClipOCR-Setup.v" version ".exe",
+        "ClipOCR-Pro.v" version ".exe"
+    ]
 
-    ; All remaining release-asset fields follow name in GitHub's asset object.
-    assetJson := SubStr(jsonText, assetPos, 8000)
-    if !RegExMatch(assetJson, '"size"\s*:\s*(\d+)', &sizeMatch)
-        return 0
-    if !RegExMatch(assetJson, '"digest"\s*:\s*"sha256:([0-9a-fA-F]{64})"', &digestMatch)
-        return 0
-    if !RegExMatch(assetJson, '"browser_download_url"\s*:\s*"([^"]+)"', &downloadMatch)
-        return 0
+    for candidateName in candidateNames {
+        escapedName := StrReplace(candidateName, ".", "\.")
+        assetPattern := '"name"\s*:\s*"' escapedName '"'
+        assetPos := RegExMatch(jsonText, assetPattern)
+        if !assetPos
+            continue
 
-    downloadUrl := DecodeGithubJsonString(downloadMatch[1])
-    assetSize := Integer(sizeMatch[1])
-    if (!IsTrustedGithubAssetUrl(downloadUrl, version) || assetSize < 100000 || assetSize > 100 * 1024 * 1024)
-        return 0
-    return { name: expectedName, size: assetSize, sha256: StrLower(digestMatch[1]), downloadUrl: downloadUrl }
+        ; All remaining release-asset fields follow name in GitHub's asset object.
+        assetJson := SubStr(jsonText, assetPos, 8000)
+        if !RegExMatch(assetJson, '"size"\s*:\s*(\d+)', &sizeMatch)
+            continue
+        if !RegExMatch(assetJson, '"digest"\s*:\s*"sha256:([0-9a-fA-F]{64})"', &digestMatch)
+            continue
+        if !RegExMatch(assetJson, '"browser_download_url"\s*:\s*"([^"]+)"', &downloadMatch)
+            continue
+
+        downloadUrl := DecodeGithubJsonString(downloadMatch[1])
+        assetSize := Integer(sizeMatch[1])
+        if (!IsTrustedGithubAssetUrl(downloadUrl, version, candidateName) || assetSize < 100000 || assetSize > 100 * 1024 * 1024)
+            continue
+        return { name: candidateName, size: assetSize, sha256: StrLower(digestMatch[1]), downloadUrl: downloadUrl }
+    }
+    return 0
 }
 
 DecodeGithubJsonString(value) {
@@ -3120,9 +3166,13 @@ IsTrustedGithubReleaseUrl(url) {
     return RegExMatch(url, "i)^https://github\.com/KwangBeomPark/(?:01_)?ClipOCR-Pro/releases(?:/|$)") > 0
 }
 
-IsTrustedGithubAssetUrl(url, version) {
-    expectedUrl := "https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases/download/v" version "/ClipOCR-Pro.v" version ".exe"
-    return StrLower(url) == StrLower(expectedUrl)
+IsTrustedGithubAssetUrl(url, version, assetName := "") {
+    if (assetName != "") {
+        expectedUrl := "https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases/download/v" version "/" assetName
+        if (StrLower(url) == StrLower(expectedUrl))
+            return true
+    }
+    return RegExMatch(url, "i)^https://github\.com/KwangBeomPark/01_ClipOCR-Pro/releases/download/v" StrReplace(version, ".", "\.") "/[A-Za-z0-9._-]+\.exe$") > 0
 }
 
 ValidateDownloadedUpdate(filePath, releaseInfo) {
@@ -3148,11 +3198,23 @@ ValidateDownloadedUpdate(filePath, releaseInfo) {
             try file.Close()
     }
 
-    try downloadedVersion := ExtractSemanticVersion(FileGetVersion(filePath))
-    catch
-        return "The downloaded executable has no readable version."
-    if (downloadedVersion != releaseInfo.latestVersion)
-        return "The downloaded executable version does not match the release."
+    isSetup := InStr(releaseInfo.assetName, "Setup") > 0
+    if (!isSetup) {
+        try downloadedVersion := ExtractSemanticVersion(FileGetVersion(filePath))
+        catch
+            return "The downloaded executable has no readable version."
+        if (downloadedVersion != releaseInfo.latestVersion)
+            return "The downloaded executable version does not match the release."
+    } else {
+        try {
+            rawVer := FileGetVersion(filePath)
+            if (rawVer != "") {
+                downloadedVersion := ExtractSemanticVersion(rawVer)
+                if (downloadedVersion != "" && downloadedVersion != releaseInfo.latestVersion)
+                    return "The downloaded executable version does not match the release."
+            }
+        }
+    }
 
     actualHash := GetFileSha256(filePath)
     if (actualHash == "" || StrLower(actualHash) != StrLower(releaseInfo.sha256))
@@ -3393,9 +3455,11 @@ SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipb
     newImageLangs := ""
     for i, code in selectedCodes
         newImageLangs .= (i == 1 ? "" : ",") code
-    IMAGE_TRANSLATE_LANGS := NormalizeLangCodeList(newImageLangs)
-    if !SafeRegWriteString(IMAGE_TRANSLATE_LANGS, REG_PATH, "ImageTranslateLangs")
+    newImageLangs := NormalizeLangCodeList(newImageLangs)
+    if !SafeRegWriteString(newImageLangs, REG_PATH, "ImageTranslateLangs")
         problems.Push("Image translate languages / 이미지 번역 언어")
+    else
+        IMAGE_TRANSLATE_LANGS := newImageLangs
     UpdateImageTranslateMenu()
 
     return problems
@@ -3982,8 +4046,17 @@ ShowManualDialog() {
         else
             lang := "en"
 
+        if !SafeRegWriteString(lang, REG_PATH, "ManualLang") {
+            for index, code in ["ko", "en", "pl", "de", "fr", "es"] {
+                if code == MANUAL_LANG {
+                    LangDDL.Choose(index)
+                    break
+                }
+            }
+            MsgBox("The language preference could not be saved. Your previous language was kept.", APP_NAME, 262160)
+            return
+        }
         MANUAL_LANG := lang
-        try SafeRegWriteString(lang, REG_PATH, "ManualLang")
         ManEdit.Value := GetManualText(lang)
     }
     LangDDL.OnEvent("Change", OnManualLangChange)

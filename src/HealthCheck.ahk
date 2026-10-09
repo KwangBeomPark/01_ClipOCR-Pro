@@ -110,11 +110,11 @@ RunHealthCheckSuite(errors) {
     }
 
     fixtureHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    fixtureJson := '{"tag_name":"v9.8.7","name":"Release v9.8.7","html_url":"https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases/tag/v9.8.7","assets":[{"name":"ClipOCR-Pro.v9.8.7.exe","size":1569280,"digest":"sha256:'
+    fixtureJson := '{"tag_name":"v9.8.7","name":"Release v9.8.7","html_url":"https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases/tag/v9.8.7","assets":[{"name":"App01_ClipOCR-Pro_Setup_v9.8.7.exe","size":1569280,"digest":"sha256:'
     fixtureJson .= fixtureHash
-    fixtureJson .= '","browser_download_url":"https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases/download/v9.8.7/ClipOCR-Pro.v9.8.7.exe"}]}'
+    fixtureJson .= '","browser_download_url":"https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases/download/v9.8.7/App01_ClipOCR-Pro_Setup_v9.8.7.exe"}]}'
     Check(() => (releaseInfo := ParseGithubLatestRelease(fixtureJson)) && IsObject(releaseInfo)
-        && releaseInfo.version == "9.8.7" && releaseInfo.assetName == "ClipOCR-Pro.v9.8.7.exe"
+        && releaseInfo.version == "9.8.7" && releaseInfo.assetName == "App01_ClipOCR-Pro_Setup_v9.8.7.exe"
         && releaseInfo.assetSize == 1569280 && releaseInfo.sha256 == fixtureHash, "GitHub release parsing")
 
     hashFixture := A_Temp "\clipocr_health_" DllCall("GetCurrentProcessId") ".txt"
@@ -160,6 +160,62 @@ RunHealthCheckSuite(errors) {
             if FileExist(jpgFixture)
                 FileDelete(jpgFixture)
         }
+    }
+    Check(() => CheckSettingsSetterFailure(), "settings setters keep runtime state after failed save")
+}
+
+CheckSettingsSetterFailure() {
+    global CONFIG_DIR, CONFIG_FILE, REG_PATH, SAVE_FOLDER, SAVE_FOLDER_SOURCE, AUTO_CLIPBOARD
+    global OCR_ENGINE, OCR_LANGUAGES, CLIP_WIDTH, COPY_OUTLINE_ENABLED, JPG_QUALITY
+    global SAVE_IMAGE_FORMAT, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_FONT_SIZE
+    oldDir := CONFIG_DIR
+    oldFile := CONFIG_FILE
+    CONFIG_DIR := A_Temp "\clipocr-settings-failure-" DllCall("GetCurrentProcessId") "-" A_TickCount
+    CONFIG_FILE := CONFIG_DIR "\config.ini"
+    locked := 0
+    try {
+        REG_PATH := "HKCU\Software\ClipOCR-Health-Fixture-NoUserSettings"
+        SettingsWriteIniValues(CONFIG_FILE, [{Section: "General", Key: "Fixture", Value: "original"}])
+        original := FileRead(CONFIG_FILE, "UTF-16")
+        SAVE_FOLDER := "old"
+        SAVE_FOLDER_SOURCE := "local"
+        AUTO_CLIPBOARD := true
+        OCR_ENGINE := "auto"
+        OCR_LANGUAGES := "en-US"
+        CLIP_WIDTH := 1200
+        COPY_OUTLINE_ENABLED := true
+        JPG_QUALITY := 90
+        SAVE_IMAGE_FORMAT := "png"
+        TEXT_TRANSLATE_LANG := "ko"
+        TEXT_TRANSLATE_FONT_SIZE := 10
+        locked := FileOpen(CONFIG_FILE, "r-wd")
+        if SetSaveFolder("new") || SAVE_FOLDER != "old"
+            throw Error("Save folder changed after failed persistence")
+        if SetAutoClipboard(false) || !AUTO_CLIPBOARD
+            throw Error("Clipboard state changed after failed persistence")
+        if SetOcrEngine("windows") || OCR_ENGINE != "auto"
+            throw Error("OCR engine changed after failed persistence")
+        if SetOcrLanguages("ko-KR") || OCR_LANGUAGES != "en-US"
+            throw Error("OCR languages changed after failed persistence")
+        if SetClipWidth(800) || CLIP_WIDTH != 1200
+            throw Error("Clipboard width changed after failed persistence")
+        if SetCopyOutline(false) || !COPY_OUTLINE_ENABLED
+            throw Error("Copy outline changed after failed persistence")
+        if SetJpegQuality(70) || JPG_QUALITY != 90
+            throw Error("JPEG quality changed after failed persistence")
+        if SetSaveImageFormat("jpg") || SAVE_IMAGE_FORMAT != "png"
+            throw Error("Image format changed after failed persistence")
+        if SetTextTranslateLang("en") || TEXT_TRANSLATE_LANG != "ko"
+            throw Error("Translation language changed after failed persistence")
+        if SetTextTranslateFontSize(12) || TEXT_TRANSLATE_FONT_SIZE != 10
+            throw Error("Translation font changed after failed persistence")
+        return FileRead(CONFIG_FILE, "UTF-16") == original
+    } finally {
+        if locked
+            locked.Close()
+        CONFIG_DIR := oldDir
+        CONFIG_FILE := oldFile
+        ; Retain the unique fixture as inspection evidence.
     }
 }
 

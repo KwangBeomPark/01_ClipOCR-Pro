@@ -39,7 +39,7 @@ AutoHotkey v2 기반의 포터블 화면 캡처, OCR, 선택 텍스트 번역, �
 ### 📥 일반 사용자용 원클릭 다운로드 및 설치
 
 1. 깃허브 화면 우측의 **[Releases](https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases)** 탭으로 이동합니다.
-2. 최신 설치 파일인 **`ClipOCR-Setup.vX.Y.Z.exe`** (사내 배포 시 `App01_ClipOCR-Setup_vX.Y.Z.exe`)를 다운로드합니다.
+2. 현재 릴리즈의 설치 파일을 다운로드합니다. 1.6.2부터 이름은 **`App01_ClipOCR-Pro_Setup_vX.Y.Z.exe`** 하나이며 이전 게시본의 파일명은 보존합니다. 새 버전의 서명·게시 준비는 [릴리즈 체크리스트](RELEASE_CHECKLIST.md)를 참고하세요.
 3. 다운로드한 설치 파일을 실행하여 설치를 완료합니다. (기본 설치 경로: `%LOCALAPPDATA%\Programs\ClipOCR`, 관리자 UAC 권한 불필요)
 4. 설치 즉시 바탕화면과 시작 메뉴에 바로가기가 생성되며, Windows 시스템 트레이에 아이콘이 표시되어 바로 사용할 수 있습니다.
 
@@ -55,7 +55,7 @@ AutoHotkey v2 기반의 포터블 화면 캡처, OCR, 선택 텍스트 번역, �
 
 `./scripts/build.ps1 -TesseractDirectory C:\Approved\Tesseract`를 실행하면 `tesseract.exe`, `tessdata\kor.traineddata`, `tessdata\eng.traineddata`를 검증한 뒤 Full ZIP도 만듭니다. 저장소와 Light 빌드는 출처가 검증되지 않은 OCR 실행 파일을 내려받거나 포함하지 않습니다. 자세한 내용은 [OCR 패키징 안내](docs/OCR_PACKAGING.md)를 참고하세요.
 
-릴리즈 서명은 Windows 인증서 저장소의 코드서명 인증서를 SHA-1 지문(`CLIPOCR_SIGN_CERT_THUMBPRINT`)으로 선택합니다. Certum 오픈소스 코드서명(카드 리더기 또는 SimplySign Desktop)처럼 카드·클라우드에 보관되는 인증서는 이 방식으로만 사용할 수 있으며 개인키는 토큰 밖으로 나오지 않습니다. 인증서 만료 후에도 서명이 유효하도록 RFC 3161 타임스탬프 서버(`CLIPOCR_TIMESTAMP_SERVER`, Certum은 `http://time.certum.pl`)가 필수입니다. Windows SDK의 `signtool.exe`가 있으면 사용하며(`CLIPOCR_SIGNTOOL_PATH`로 경로 지정 가능) 이때 RFC 3161 타임스탬프가 적용됩니다. 없으면 `Set-AuthenticodeSignature`로 대체되는데 이 경로는 레거시 Authenticode 타임스탬프만 가능하므로(매니페스트의 `timestampType`에 기록됨) 정식 릴리즈 빌드에는 Windows SDK 서명 도구를 설치하세요. `publish.ps1`은 RFC 3161이 아닌 타임스탬프가 붙은 빌드를 `-AllowLegacyTimestamp`를 명시하지 않는 한 거부합니다. PFX 파일(`CLIPOCR_SIGN_CERT_PATH` + `CLIPOCR_SIGN_CERT_PASSWORD`)은 자체 서명 테스트 인증서를 위한 개발용 대체 경로로만 허용됩니다. 빌드는 컴파일 전에 인증서, 타임스탬프 서버, 서명 도구를 확인하며, 카드·클라우드 토큰이 연결되지 않은 경우 서명 단계에서 재연결 안내와 함께 실패합니다. `publish.ps1`은 추가로 서명자가 릴리즈 CA(기본 패턴 `CN=Certum Code Signing*`, `CLIPOCR_RELEASE_SIGNER_ISSUER`로 변경 가능)에서 발급되었는지 확인하고 자체 발급 인증서를 거부합니다. 서명 없는 배포는 유지관리자가 `-AllowUnsigned`를 명시해야만 허용됩니다.
+릴리즈 서명은 Windows 인증서 저장소의 코드서명 인증서를 SHA-1 지문(`CLIPOCR_SIGN_CERT_THUMBPRINT`)으로 선택합니다. Certum 오픈소스 코드서명(카드 리더기 또는 SimplySign Desktop)처럼 카드·클라우드에 보관되는 인증서는 이 방식으로만 사용할 수 있으며 개인키는 토큰 밖으로 나오지 않습니다. 인증서 만료 후에도 서명이 유효하도록 RFC 3161 타임스탬프 서버(`CLIPOCR_TIMESTAMP_SERVER`, Certum은 `http://time.certum.pl`)가 필수입니다. Windows SDK의 `signtool.exe`가 있으면 사용하며(`CLIPOCR_SIGNTOOL_PATH`로 경로 지정 가능) 이때 RFC 3161 타임스탬프가 적용됩니다. 없으면 `Set-AuthenticodeSignature`로 대체되는데 이 경로는 레거시 Authenticode 타임스탬프만 가능하므로(매니페스트의 `timestampType`에 기록됨) 정식 릴리즈 빌드에는 Windows SDK 서명 도구를 설치하세요. `publish.ps1`은 RFC 3161이 아닌 타임스탬프가 붙은 공식 빌드를 거부하며 기존 예외 옵션도 허용하지 않습니다. PFX 파일(`CLIPOCR_SIGN_CERT_PATH` + `CLIPOCR_SIGN_CERT_PASSWORD`)은 자체 서명 테스트 인증서를 위한 개발용 대체 경로로만 허용됩니다. 빌드는 컴파일 전에 인증서, 타임스탬프 서버, 서명 도구를 확인하며, 카드·클라우드 토큰이 연결되지 않은 경우 서명 단계에서 재연결 안내와 함께 실패합니다. `publish.ps1`은 추가로 서명자가 릴리즈 CA(기본 패턴 `CN=Certum Code Signing*`, `CLIPOCR_RELEASE_SIGNER_ISSUER`로 변경 가능)에서 발급되었는지 확인하고 자체 발급 인증서를 거부합니다. 공식 배포는 유효한 타임스탬프 서명이 필수이며 미서명 예외는 거부합니다. 고유한 스테이징에서 빌드·검증을 마친 뒤 공식 반영하며 이전 공식 폴더는 build/release-history에 보존합니다.
 
 ---
 
@@ -184,3 +184,10 @@ ClipOCR-Pro는 반복 업무를 직접 찾아내고, 실무 병목을 자동화�
       alt="Buy Me A Coffee">
   </a>
 </p>
+
+
+공통 설치·설정·배포 정비의 기준과 현재 예외는 [6개 앱 공통 정비 기준](docs/SUITE_STANDARDIZATION.md)을 참고하세요.
+
+로컬 빌드는 build/dist/out 전용이며 공식 release 직접 쓰기를 차단합니다. 배포 절차와 남은 실제 Windows 검증은 [2단계 검수](docs/STANDARDIZATION_PHASE2_REVIEW.md)를 참고하세요.
+
+설정 위치·전체 백업·새 폴더 복원: [사용자 자료](docs/USER_DATA.md), [관리 도구](scripts/Manage-UserData.ps1). 공개 구조·대표 흐름: [CODE_MAP](docs/CODE_MAP.md).

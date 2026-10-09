@@ -24,6 +24,14 @@ $RECYCLE.BIN/
 *.log
 *.tmp
 
+# Runtime user data (also when running from source)
+UserSetting/
+.env
+.env.*
+!.env.example
+*.p12
+*.key
+
 # Local AI working notes
 AGENTS.md
 myAGENT.md

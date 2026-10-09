@@ -1,65 +1,37 @@
-# scripts/release.ps1 - One-Click Release Pipeline for ClipOCR-Pro
-# Run this script in an ELEVATED (Administrator) PowerShell window for digital code signing.
-
+# Build and sign in a unique stage. Existing official files are never cleaned first.
 [CmdletBinding()]
 param(
-    [string]$OutputDirectory = "release",
-    [string]$CertificateThumbprint = "E9C72CF5090840A1805296525D56BE680622A7FD",
-    [string]$TimestampServer = "http://time.certum.pl",
+    [string]$OutputDirectory = 'release',
+    [string]$CertificateThumbprint = 'E9C72CF5090840A1805296525D56BE680622A7FD',
+    [string]$TimestampServer = 'http://time.certum.pl',
+    [string]$SignToolPath = $env:CLIPOCR_SIGNTOOL_PATH,
     [switch]$SkipSigning
 )
-
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-
+. (Join-Path $PSScriptRoot 'Common.ps1')
+. (Join-Path $PSScriptRoot 'ReleaseSafety.ps1')
 $repoRoot = Split-Path -Parent $PSScriptRoot
-
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host " ClipOCR-Pro (App01) Release Pipeline   " -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-
-# 1. Administrator check
-$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Warning "PowerShell is not running as Administrator. Smart Card / SimplySign token signing may fail."
+$target = Resolve-RepoPath $repoRoot $OutputDirectory
+if ($SkipSigning) {
+    if ($target -eq (Join-Path $repoRoot 'release')) { throw 'Unsigned output belongs in dist/build; official release cannot be unsigned.' }
+    & (Join-Path $PSScriptRoot 'build.ps1') -OutputDirectory $OutputDirectory -CertificateThumbprint '' -CertificatePath '' -IncludeEnterpriseAliases -SkipCompiledHealthCheck
+    return
 }
-
-# 2. Smart Card service check
-$scard = Get-Service -Name SCardSvr -ErrorAction SilentlyContinue
-if ($null -ne $scard -and $scard.Status -ne "Running") {
-    Write-Host "Starting Smart Card service (SCardSvr)..." -ForegroundColor Yellow
-    Start-Service -Name SCardSvr -ErrorAction SilentlyContinue
-}
-
-# 3. Clean prior release output folder
-$targetDir = Join-Path $repoRoot $OutputDirectory
-if (Test-Path -LiteralPath $targetDir) {
-    Write-Host "Cleaning output directory: $targetDir"
-    Get-ChildItem -Path $targetDir | Remove-Item -Recurse -Force
-}
-
-# 4. Invoke build.ps1
-$buildScript = Join-Path $PSScriptRoot "build.ps1"
-$buildArgs = @{
-    OutputDirectory            = $OutputDirectory
-    IncludeEnterpriseAliases   = $true
-}
-
-if (-not $SkipSigning) {
-    $buildArgs["CertificateThumbprint"] = $CertificateThumbprint
-    $buildArgs["TimestampServer"]       = $TimestampServer
-}
-
-Write-Host "Running build and packaging..." -ForegroundColor Cyan
-& $buildScript @buildArgs
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Build failed with exit code $LASTEXITCODE."
-}
-
-# 5. Output Summary
-Write-Host "`n========================================" -ForegroundColor Green
-Write-Host " Release Build Successfully Completed! " -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Green
-Get-ChildItem -LiteralPath $targetDir | Format-Table Name, Length, LastWriteTime -AutoSize
+if ($target -ne (Join-Path $repoRoot 'release')) { throw 'Signed official output must be the repository release directory. Use build.ps1 for development signing.' }
+if ((Test-GitWorkingTreeDirty $repoRoot) -ne $false) { throw 'Commit reviewed changes and choose the next version before building an official signed release.' }
+$commit = Get-GitHeadCommit $repoRoot
+if (-not $commit) { throw 'Cannot resolve source commit.' }
+$version = Get-AppVersion (Join-Path $repoRoot 'src\ClipOCR-Pro.ahk')
+$stage = Join-Path $repoRoot ('build\release-stage-' + [guid]::NewGuid().ToString('N'))
+Assert-SuiteWorkspacePath $repoRoot $stage
+Assert-SuiteWorkspacePath $repoRoot $target
+$arguments = @{ OutputDirectory = $stage; CertificateThumbprint = $CertificateThumbprint; CertificatePath = ''; TimestampServer = $TimestampServer; IncludeEnterpriseAliases = $true }
+if ($SignToolPath) { $arguments.SignToolPath = $SignToolPath }
+& (Join-Path $PSScriptRoot 'build.ps1') @arguments
+$digest = Get-SuiteSourceDigest $repoRoot
+$null = Assert-SuiteRelease $stage $version $commit $digest -RequireClean
+if ((Test-GitWorkingTreeDirty $repoRoot) -ne $false -or (Get-GitHeadCommit $repoRoot) -ne $commit) { throw 'Source changed while signing; official output was not modified.' }
+$validate = { param($directory) Assert-SuiteRelease $directory $version $commit $digest -RequireClean }.GetNewClosure()
+Move-SuiteRelease $repoRoot $stage $target $validate
+Write-Host 'Verified signed local release prepared. Existing versions are preserved in build/release-history. Publication is a separate explicit action.'
