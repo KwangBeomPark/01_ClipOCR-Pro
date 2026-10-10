@@ -1,23 +1,20 @@
-*Read this in other languages: [English](README.md), [한국어](README.ko.md)*
+﻿*Read this in other languages: [English](README.md), [한국어](README.ko.md), [Polski](README.pl.md)*
 
-# 📸 ClipOCR-Pro: Office Screen Capture, OCR & Translation Tool
-A portable screen capture, OCR, selected-text translation, and image workflow tool for practical office work, built with AutoHotkey v2.
+# 📸 ClipOCR-Pro: Office Screen Capture, Multi-Language OCR & Translation Assistant
 
 <p align="center">
   <img src="./assets/demo.gif" width="900" alt="ClipOCR-Pro Demo">
 </p>
 
----
+<p align="center">
+  <img src="./assets/clipocr_infographic.svg" width="950" alt="ClipOCR-Pro Technical Architecture and Key Performance Pipeline">
+</p>
 
-## What ClipOCR-Pro Does
+> **Practical Evidence Capture · On-Device OCR · Multilingual Translation (EN/KO/PL)**
 
-**ClipOCR-Pro** helps office professionals capture screen areas, keep reference images floating on top, annotate captured images, translate selected text, and streamline document review workflows.
+**ClipOCR-Pro** is a lightweight desktop assistant built to streamline daily office operations for teams handling document review, system reconciliation, and cross-border communication.
 
-It is designed especially for finance, accounting, sales administration, credit control, and back-office teams that frequently compare ERP data, Excel files, emails, scanned documents, screenshots, and supporting evidence.
-
-> **Capture Faster · Review Documents Clearly · Translate Selected Text · Reduce Repetitive Screen Work**
-
----
+In routine administration, finance, and operations work, team members frequently take screenshots of ERP systems, banking confirmations, and scanned receipts to explain issues, compare figures, and prepare internal guides. ClipOCR-Pro allows team members to quickly capture screen areas, read text directly from images via on-device OCR without tedious manual retyping, and translate text across languages (English, Korean, Polish) to support smooth collaboration across multinational teams.
 
 ## Core Features
 

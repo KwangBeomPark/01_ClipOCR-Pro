@@ -83,12 +83,13 @@ try {
     Add-Content -LiteralPath (Join-Path $stage 'SHA256SUMS.txt') 'extra'
     Expect-Failure { Assert-SuiteRelease $stage $version $commit $digest } 'Extra checksum entry accepted.'
     Reset-Set $stage
-    $remote = @([pscustomobject]@{ name = $names[0]; size = (Get-Item -LiteralPath $setup).Length; digest = 'sha256:' + (Get-FileHash -LiteralPath $setup).Hash.ToLowerInvariant() })
+    $remote = @([pscustomobject]@{ name = $names[0]; size = (Get-Item -LiteralPath $setup).Length; digest = 'sha256:' + (Get-FileHash -LiteralPath $setup).Hash.ToLowerInvariant(); state = 'uploaded' })
     $missing = @(Get-SuiteMissingAssets @($setup, $exe) $remote)
     Assert-Test ($missing.Count -eq 1 -and $missing[0] -eq $exe) 'Resume must return only missing assets.'
     $remote[0].digest = 'sha256:' + ('0' * 64)
     Expect-Failure { Get-SuiteMissingAssets @($setup) $remote } 'Remote digest conflict accepted.'
     Expect-Failure { Get-SuiteMissingAssets @($setup) @([pscustomobject]@{ name = $names[0]; size = 17 }) } 'Missing remote digest accepted.'
+    Expect-Failure { Get-SuiteMissingAssets @($setup) @([pscustomobject]@{ name = $names[0]; size = (Get-Item -LiteralPath $setup).Length; digest = 'sha256:' + (Get-FileHash -LiteralPath $setup).Hash.ToLowerInvariant(); state = 'pending' }) } 'Pending remote state accepted.'
     $release = Join-Path $fixture 'release'
     New-Item -ItemType Directory -Path $release | Out-Null
     [IO.File]::WriteAllText((Join-Path $release 'previous.txt'), 'previous-release')

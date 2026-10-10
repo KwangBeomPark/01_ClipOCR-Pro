@@ -1,0 +1,316 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" width="100%" height="100%" style="background:#090d16;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <defs>
+    <!-- Background Gradients -->
+    <radialGradient id="bg-glow-cyan" cx="15%" cy="25%" r="40%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bg-glow-purple" cx="50%" cy="30%" r="50%">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bg-glow-blue" cx="85%" cy="30%" r="40%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Card Gradients -->
+    <linearGradient id="card-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#141c2e" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#0e1422" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="subcard-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#19233a" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#101827" stop-opacity="0.9"/>
+    </linearGradient>
+
+    <!-- Border Gradients -->
+    <linearGradient id="border-cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#0891b2" stop-opacity="0.3"/>
+    </linearGradient>
+    <linearGradient id="border-purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a855f7" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0.4"/>
+    </linearGradient>
+    <linearGradient id="border-blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#1d4ed8" stop-opacity="0.3"/>
+    </linearGradient>
+    <linearGradient id="border-green" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#059669" stop-opacity="0.4"/>
+    </linearGradient>
+
+    <!-- Arrow Markers -->
+    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#38bdf8"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#a855f7"/>
+    </marker>
+  </defs>
+
+  <!-- Background Base -->
+  <rect width="1200" height="675" fill="#090d16"/>
+  <rect width="1200" height="675" fill="url(#bg-glow-cyan)"/>
+  <rect width="1200" height="675" fill="url(#bg-glow-purple)"/>
+  <rect width="1200" height="675" fill="url(#bg-glow-blue)"/>
+
+  <!-- Subtle Grid Lines -->
+  <g stroke="#1f293d" stroke-width="0.5" opacity="0.4">
+    <line x1="0" y1="90" x2="1200" y2="90"/>
+    <line x1="0" y1="630" x2="1200" y2="630"/>
+    <line x1="265" y1="90" x2="265" y2="630" stroke-dasharray="4 4"/>
+    <line x1="720" y1="90" x2="720" y2="630" stroke-dasharray="4 4"/>
+    <line x1="970" y1="90" x2="970" y2="630" stroke-dasharray="4 4"/>
+  </g>
+
+  <!-- ==================== HEADER ==================== -->
+  <g transform="translate(40, 28)">
+    <rect x="0" y="0" width="175" height="22" rx="11" fill="#06b6d4" fill-opacity="0.15" stroke="#06b6d4" stroke-width="0.8"/>
+    <text x="87" y="15" fill="#22d3ee" font-size="10.5" font-weight="700" letter-spacing="1.2" text-anchor="middle">PRACTICAL OFFICE UTILITY</text>
+    
+    <text x="0" y="46" fill="#ffffff" font-size="22" font-weight="800" letter-spacing="-0.5">
+      ClipOCR-Pro <tspan fill="#94a3b8" font-size="16" font-weight="500">(Office Screen Capture, OCR &amp; Translation Assistant)</tspan>
+    </text>
+    <text x="750" y="38" fill="#64748b" font-size="12" font-weight="500" text-anchor="end">
+      Everyday Evidence Capture, On-Device Text Reading &amp; Multilingual Support
+    </text>
+  </g>
+
+  <!-- ==================== STAGE 1: INPUT SOURCES ==================== -->
+  <g transform="translate(40, 105)">
+    <rect width="210" height="515" rx="14" fill="url(#card-grad)" stroke="url(#border-cyan)" stroke-width="1.2"/>
+    
+    <rect x="14" y="14" width="70" height="18" rx="9" fill="#06b6d4" fill-opacity="0.2"/>
+    <text x="49" y="27" fill="#22d3ee" font-size="9.5" font-weight="800" text-anchor="middle">STAGE 1</text>
+    <text x="14" y="52" fill="#f8fafc" font-size="15" font-weight="700">INPUT SOURCES</text>
+    <text x="14" y="68" fill="#64748b" font-size="10.5">Screen &amp; Evidence Snip</text>
+
+    <!-- Item 1: Snipping Tool -->
+    <g transform="translate(14, 85)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#06b6d4" fill-opacity="0.15"/>
+      <path d="M19 24h10M24 19v10" stroke="#22d3ee" stroke-width="2" stroke-linecap="round"/>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Screen Snipping Canvas</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">Global Hotkey: <tspan fill="#38bdf8" font-weight="600">Win+Alt+C</tspan></text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Snip ERP screens &amp; vouchers</text>
+    </g>
+
+    <!-- Item 2: Floating Image -->
+    <g transform="translate(14, 163)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#3b82f6" fill-opacity="0.15"/>
+      <rect x="18" y="19" width="12" height="10" rx="1.5" fill="none" stroke="#60a5fa" stroke-width="1.8"/>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Floating Reference Pin</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">Always-On-Top Window</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Keep images visible while typing</text>
+    </g>
+
+    <!-- Item 3: Multi-Monitor -->
+    <g transform="translate(14, 241)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#8b5cf6" fill-opacity="0.15"/>
+      <rect x="18" y="19" width="8" height="6" stroke="#c084fc" stroke-width="1.5" fill="none"/>
+      <rect x="22" y="23" width="8" height="6" stroke="#c084fc" stroke-width="1.5" fill="none"/>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Multi-Display Support</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">Cross-Monitor Capture</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Seamless across dual monitors</text>
+    </g>
+
+    <!-- Item 4: Image Drag & Drop -->
+    <g transform="translate(14, 319)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#10b981" fill-opacity="0.15"/>
+      <path d="M19 28v-8h10v8M24 16v8" stroke="#34d399" stroke-width="1.8" stroke-linecap="round"/>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Image File Import</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">Drag &amp; Drop Receipts</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">PNG, JPG, BMP file support</text>
+    </g>
+
+    <!-- Bottom Note -->
+    <rect x="14" y="450" width="182" height="48" rx="7" fill="#042f2e" fill-opacity="0.5" stroke="#0d9488" stroke-width="0.8"/>
+    <text x="24" y="468" fill="#2dd4bf" font-size="10" font-weight="700">🔒 Safe Local Memory</text>
+    <text x="24" y="484" fill="#99f6e4" font-size="9">Images processed safely on device</text>
+  </g>
+
+  <!-- Flow Connector 1 -> 2 -->
+  <path d="M 252 355 L 282 355" stroke="#06b6d4" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- ==================== STAGE 2: CORE PROCESSING ENGINE ==================== -->
+  <g transform="translate(285, 105)">
+    <rect width="430" height="515" rx="14" fill="url(#card-grad)" stroke="url(#border-purple)" stroke-width="1.4"/>
+    
+    <rect x="18" y="14" width="70" height="18" rx="9" fill="#8b5cf6" fill-opacity="0.2"/>
+    <text x="53" y="27" fill="#c084fc" font-size="9.5" font-weight="800" text-anchor="middle">STAGE 2</text>
+    <text x="18" y="52" fill="#f8fafc" font-size="15" font-weight="700">CORE OCR &amp; TRANSLATION ENGINE</text>
+    <text x="18" y="68" fill="#64748b" font-size="10.5">On-Device OCR &amp; Practical Multilingual Workflow</text>
+
+    <!-- Top Pre-Processing -->
+    <g transform="translate(18, 85)">
+      <rect width="394" height="66" rx="9" fill="#1e1b4b" fill-opacity="0.6" stroke="#6366f1" stroke-width="1.2"/>
+      <text x="16" y="26" fill="#a5b4fc" font-size="12.5" font-weight="700">⚡ Image Reading &amp; Contrast Optimizer</text>
+      <text x="16" y="44" fill="#cbd5e1" font-size="10.5">Grayscale Filtering • Contrast Enhancement • Clean Edge Detection</text>
+      <text x="16" y="57" fill="#818cf8" font-size="9.5">Improves OCR accuracy on low-contrast scanned receipts and ERP screens</text>
+    </g>
+
+    <!-- Dual Engine Cards -->
+    <g transform="translate(18, 163)">
+      <rect width="190" height="96" rx="9" fill="url(#subcard-grad)" stroke="#312e81" stroke-width="1"/>
+      <rect x="12" y="12" width="22" height="22" rx="4" fill="#8b5cf6" fill-opacity="0.2"/>
+      <text x="23" y="27" fill="#c084fc" font-size="12" font-weight="700" text-anchor="middle">T</text>
+      <text x="42" y="24" fill="#f8fafc" font-size="12" font-weight="600">Tesseract OCR</text>
+      <text x="42" y="38" fill="#94a3b8" font-size="10">Deep Script Recognition</text>
+      <text x="12" y="58" fill="#cbd5e1" font-size="9.5">• EN, KO, PL, JA, ZH</text>
+      <text x="12" y="72" fill="#cbd5e1" font-size="9.5">• Recognizes small table text</text>
+      <text x="12" y="86" fill="#a78bfa" font-size="9">Local offline trained data</text>
+
+      <g transform="translate(204, 0)">
+        <rect width="190" height="96" rx="9" fill="url(#subcard-grad)" stroke="#1e3a8a" stroke-width="1"/>
+        <rect x="12" y="12" width="22" height="22" rx="4" fill="#3b82f6" fill-opacity="0.2"/>
+        <text x="23" y="27" fill="#60a5fa" font-size="11" font-weight="700" text-anchor="middle">W</text>
+        <text x="42" y="24" fill="#f8fafc" font-size="12" font-weight="600">Windows Media OCR</text>
+        <text x="42" y="38" fill="#94a3b8" font-size="10">Built-in Windows Engine</text>
+        <text x="12" y="58" fill="#cbd5e1" font-size="9.5">• Fast system-level reader</text>
+        <text x="12" y="72" fill="#cbd5e1" font-size="9.5">• Native Windows 10/11 support</text>
+        <text x="12" y="86" fill="#93c5fd" font-size="9">Zero extra installation needed</text>
+      </g>
+    </g>
+
+    <!-- Multilingual Translation -->
+    <g transform="translate(18, 271)">
+      <rect width="394" height="60" rx="9" fill="url(#subcard-grad)" stroke="#374151" stroke-width="1"/>
+      <circle cx="26" cy="30" r="12" fill="#ec4899" fill-opacity="0.15"/>
+      <text x="26" y="34" fill="#f472b6" font-size="11" font-weight="700" text-anchor="middle">🌐</text>
+      <text x="46" y="26" fill="#f8fafc" font-size="12" font-weight="600">Practical Multilingual Translation Assistant</text>
+      <text x="46" y="42" fill="#94a3b8" font-size="10">Translates selected text or OCR results between English, Korean, and Polish</text>
+      <text x="46" y="54" fill="#64748b" font-size="9">Helps team members quickly understand foreign contracts and invoices</text>
+    </g>
+
+    <!-- Post-Processing & Formatting -->
+    <g transform="translate(18, 343)">
+      <rect width="394" height="88" rx="9" fill="url(#subcard-grad)" stroke="#4338ca" stroke-width="1"/>
+      <rect x="14" y="14" width="22" height="22" rx="4" fill="#6366f1" fill-opacity="0.2"/>
+      <text x="25" y="29" fill="#a5b4fc" font-size="12" font-weight="700" text-anchor="middle">⚙️</text>
+      <text x="46" y="26" fill="#f8fafc" font-size="12" font-weight="600">Text Formatting &amp; Sensitive Data Masking</text>
+      <text x="46" y="42" fill="#94a3b8" font-size="10.5">• Markdown Table formatting for easy pasting into Excel, Notion, or Jira</text>
+      <text x="46" y="58" fill="#94a3b8" font-size="10.5">• Quick annotation pins, arrows, and highlights for team guides</text>
+      <text x="46" y="74" fill="#94a3b8" font-size="10.5">• Mosaic blur to hide sensitive unit prices or personal account numbers</text>
+    </g>
+
+    <!-- Bottom Engine Status -->
+    <rect x="18" y="445" width="394" height="53" rx="7" fill="#1e1b4b" fill-opacity="0.5" stroke="#4f46e5" stroke-width="0.8"/>
+    <text x="30" y="466" fill="#a5b4fc" font-size="10.5" font-weight="700">🔒 100% On-Device Privacy</text>
+    <text x="30" y="483" fill="#cbd5e1" font-size="9.5">Extracted text stays completely on your PC — zero corporate data leaks</text>
+  </g>
+
+  <!-- Flow Connector 2 -> 3 -->
+  <path d="M 717 355 L 747 355" stroke="#a855f7" stroke-width="2.5" marker-end="url(#arrow-purple)"/>
+
+  <!-- ==================== STAGE 3: OUTPUTS ==================== -->
+  <g transform="translate(750, 105)">
+    <rect width="210" height="515" rx="14" fill="url(#card-grad)" stroke="url(#border-blue)" stroke-width="1.2"/>
+    
+    <rect x="14" y="14" width="70" height="18" rx="9" fill="#3b82f6" fill-opacity="0.2"/>
+    <text x="49" y="27" fill="#60a5fa" font-size="9.5" font-weight="800" text-anchor="middle">STAGE 3</text>
+    <text x="14" y="52" fill="#f8fafc" font-size="15" font-weight="700">OUTPUTS</text>
+    <text x="14" y="68" fill="#64748b" font-size="10.5">Convenient Daily Results</text>
+
+    <!-- Item 1: Clipboard -->
+    <g transform="translate(14, 85)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#3b82f6" fill-opacity="0.15"/>
+      <text x="24" y="28" fill="#60a5fa" font-size="11" font-weight="700" text-anchor="middle">📋</text>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Direct Clipboard</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">Instant Windows Paste</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Paste directly via Ctrl+V</text>
+    </g>
+
+    <!-- Item 2: Table Format -->
+    <g transform="translate(14, 163)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#06b6d4" fill-opacity="0.15"/>
+      <text x="24" y="28" fill="#22d3ee" font-size="11" font-weight="700" text-anchor="middle">📊</text>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Table Structure</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">Formatted Grid Text</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Paste into Excel cells easily</text>
+    </g>
+
+    <!-- Item 3: Annotated Image -->
+    <g transform="translate(14, 241)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#8b5cf6" fill-opacity="0.15"/>
+      <text x="24" y="28" fill="#c084fc" font-size="11" font-weight="700" text-anchor="middle">🖍️</text>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Annotated Images</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">Boxes, Notes &amp; Pins</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Ready for SOP user manuals</text>
+    </g>
+
+    <!-- Item 4: History -->
+    <g transform="translate(14, 319)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#10b981" fill-opacity="0.15"/>
+      <circle cx="24" cy="24" r="12" fill="#34d399" fill-opacity="0.15"/>
+      <text x="24" y="28" fill="#34d399" font-size="11" font-weight="700" text-anchor="middle">🕒</text>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Tray Capture Log</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">Quick Recent Access</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Review recent captures</text>
+    </g>
+
+    <!-- Bottom Output Status -->
+    <rect x="14" y="450" width="182" height="48" rx="7" fill="#1e293b" fill-opacity="0.5" stroke="#334155" stroke-width="0.8"/>
+    <text x="24" y="468" fill="#94a3b8" font-size="10" font-weight="700">⚡ Smooth Operation</text>
+    <text x="24" y="484" fill="#cbd5e1" font-size="9">Eliminates manual retyping</text>
+  </g>
+
+  <!-- Flow Connector 3 -> 4 -->
+  <path d="M 962 355 L 987 355" stroke="#3b82f6" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- ==================== STAGE 4: KEY OPERATIONAL BENEFITS ==================== -->
+  <g transform="translate(990, 105)">
+    <rect width="170" height="515" rx="14" fill="url(#card-grad)" stroke="url(#border-green)" stroke-width="1.2"/>
+    
+    <rect x="12" y="14" width="70" height="18" rx="9" fill="#10b981" fill-opacity="0.2"/>
+    <text x="47" y="27" fill="#34d399" font-size="9.5" font-weight="800" text-anchor="middle">STAGE 4</text>
+    <text x="12" y="52" fill="#f8fafc" font-size="13.5" font-weight="700">TEAM BENEFITS</text>
+    <text x="12" y="68" fill="#64748b" font-size="10">Operational Value</text>
+
+    <!-- Benefit 1: Fast & Easy -->
+    <g transform="translate(12, 85)">
+      <rect width="146" height="88" rx="9" fill="url(#subcard-grad)" stroke="#065f46" stroke-width="1"/>
+      <text x="14" y="30" fill="#34d399" font-size="18" font-weight="800">Fast &amp; Easy</text>
+      <text x="14" y="48" fill="#f1f5f9" font-size="11" font-weight="600">Quick Evidence Snip</text>
+      <text x="14" y="64" fill="#94a3b8" font-size="9.5">Keep images visible on top while comparing</text>
+    </g>
+
+    <!-- Benefit 2: On-Device -->
+    <g transform="translate(12, 185)">
+      <rect width="146" height="88" rx="9" fill="url(#subcard-grad)" stroke="#065f46" stroke-width="1"/>
+      <text x="14" y="30" fill="#34d399" font-size="18" font-weight="800">On-Device</text>
+      <text x="14" y="48" fill="#f1f5f9" font-size="11" font-weight="600">Safe OCR Reading</text>
+      <text x="14" y="64" fill="#94a3b8" font-size="9.5">Reads text locally with zero cloud leaks</text>
+    </g>
+
+    <!-- Benefit 3: Multilingual -->
+    <g transform="translate(12, 285)">
+      <rect width="146" height="88" rx="9" fill="url(#subcard-grad)" stroke="#065f46" stroke-width="1"/>
+      <text x="14" y="30" fill="#34d399" font-size="18" font-weight="800">Multilingual</text>
+      <text x="14" y="48" fill="#f1f5f9" font-size="11" font-weight="600">EN • KO • PL</text>
+      <text x="14" y="64" fill="#94a3b8" font-size="9.5">Easy translation for multinational teams</text>
+    </g>
+
+    <!-- Benefit 4: Team Ready -->
+    <g transform="translate(12, 385)">
+      <rect width="146" height="88" rx="9" fill="url(#subcard-grad)" stroke="#065f46" stroke-width="1"/>
+      <text x="14" y="30" fill="#34d399" font-size="18" font-weight="800">Team Ready</text>
+      <text x="14" y="48" fill="#f1f5f9" font-size="11" font-weight="600">Portable Utility</text>
+      <text x="14" y="64" fill="#94a3b8" font-size="9.5">Runs on company PCs without admin rights</text>
+    </g>
+
+    <!-- Tech Stack Pill -->
+    <g transform="translate(12, 485)">
+      <rect width="146" height="20" rx="5" fill="#1e293b"/>
+      <text x="73" y="14" fill="#94a3b8" font-size="9" font-weight="600" text-anchor="middle">Python 3.12 • Tkinter • Tesseract</text>
+    </g>
+  </g>
+</svg>

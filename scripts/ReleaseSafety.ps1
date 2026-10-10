@@ -178,6 +178,11 @@ function Move-SuiteDirectory {
 
 function Get-SuiteMissingAssets {
     param([string[]]$LocalPaths, $RemoteAssets)
+    $expectedNames = @($LocalPaths | ForEach-Object { Split-Path -Leaf $_ })
+    if (@($expectedNames | Sort-Object -Unique).Count -ne $expectedNames.Count) { throw 'Duplicate local release asset name.' }
+    foreach ($asset in @($RemoteAssets)) {
+        if ($asset.name -cnotin $expectedNames) { throw "Unexpected remote release asset: $($asset.name). Existing files were preserved." }
+    }
     $missing = @()
     foreach ($path in $LocalPaths) {
         $name = Split-Path -Leaf $path
@@ -185,7 +190,7 @@ function Get-SuiteMissingAssets {
         if ($matches.Count -gt 1) { throw "Duplicate remote asset: $name" }
         if ($matches.Count -eq 0) { $missing += $path; continue }
         $expected = 'sha256:' + (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-        if (-not $matches[0].PSObject.Properties['digest'] -or $matches[0].digest -cne $expected -or $matches[0].size -ne (Get-Item -LiteralPath $path).Length) { throw "Remote asset digest/size mismatch or unavailable: $name. Existing assets will not be replaced." }
+        if (-not $matches[0].PSObject.Properties['state'] -or $matches[0].state -ne 'uploaded' -or -not $matches[0].PSObject.Properties['digest'] -or $matches[0].digest -cne $expected -or $matches[0].size -ne (Get-Item -LiteralPath $path).Length) { throw "Remote asset state/digest/size mismatch or unavailable: $name. Existing assets will not be replaced." }
     }
     $missing
 }

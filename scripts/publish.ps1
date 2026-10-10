@@ -4,7 +4,8 @@ param(
     [switch]$AllowUnsigned,
     [switch]$AllowLegacyTimestamp,
     [switch]$NoPush,
-    [switch]$Draft
+    [switch]$Draft,
+    [switch]$Resume
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,10 +59,16 @@ try {
     # A fully paginated successful query includes drafts and fails closed.
     $existingRelease = Get-SuiteRemoteRelease $repository $tag
     if ($existingRelease) {
-        if ($existingRelease.draft) {
-            throw "A draft release $tag already exists. Preserve it and review its verified assets before manually completing it, or choose a new version."
+        if (-not $existingRelease.draft) {
+            throw "GitHub release $tag already exists. Bump APP_VERSION instead of replacing it."
         }
-        throw "GitHub release $tag already exists. Bump APP_VERSION instead of replacing it."
+        if (-not $Resume) {
+            throw "A draft release $tag already exists. Preserve it and review its verified assets, or specify -Resume to complete it."
+        }
+    } else {
+        if ($Resume) {
+            throw "Cannot resume release $tag because it does not exist."
+        }
     }
 
     # A leftover tag would silently bind the release to whatever commit the tag points at.
@@ -77,6 +84,9 @@ try {
     }
     if ($null -ne $remoteTagCommit -and $remoteTagCommit -ne $targetCommit) {
         throw "Tag $tag already exists on origin at $remoteTagCommit, not at HEAD ($targetCommit). Preserve it and choose a new version."
+    }
+    if ($existingRelease -and -not $remoteTagCommit -and $existingRelease.target_commitish -cne $targetCommit) {
+        throw 'Resume requires an immutable tag at HEAD or an unpublished draft targeting the exact HEAD SHA. Preserve branch-targeted drafts for review; do not move tags.'
     }
 
     # Publication consumes the exact already-reviewed signed set. It never builds or signs.
@@ -115,33 +125,40 @@ try {
     }
     # Certificate names may contain quotes, which Windows PowerShell cannot pass to a native tool
     # intact, so gh reads the notes from a file instead of an argument.
-    $notesPath = [IO.Path]::GetTempFileName()
-    [IO.File]::WriteAllText($notesPath, (($notesLines -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
-
     $action = "create immutable GitHub release $tag at verified commit $targetCommit"
     if (-not $PSCmdlet.ShouldProcess($repository, $action)) {
         return
     }
     if ((Get-GitHeadCommit $repoRoot) -ne $targetCommit -or (Test-GitWorkingTreeDirty $repoRoot) -ne $false -or (Get-SuiteSourceDigest $repoRoot) -ne $sourceDigest) { throw 'Source changed after build verification; publication refused.' }
-    # Create the release as a draft so a failed asset upload never leaves a public, half-populated
-    # release behind; publishing is the final step and is what creates the tag at the target commit.
-    $createArgs = @("release", "create", $tag) + $assets + @(
-        "--draft",
-        "--repo", $ghRepository,
-        "--target", $targetCommit,
-        "--title", $tag,
-        "--notes-file", $notesPath
-    )
-    $null = Invoke-NativeChecked gh $createArgs "GitHub release creation" -FailureHint "If a draft was left behind, preserve and review it. Retry only missing verified assets or select a new version; never delete or overwrite existing release assets."
+    $notesPath = [IO.Path]::GetTempFileName()
+    [IO.File]::WriteAllText($notesPath, (($notesLines -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+    # Create or update draft release
+    if (-not $existingRelease) {
+        $createArgs = @("release", "create", $tag) + $assets + @(
+            "--draft",
+            "--repo", $ghRepository,
+            "--target", $targetCommit,
+            "--title", $tag,
+            "--notes-file", $notesPath
+        )
+        $null = Invoke-NativeChecked gh $createArgs "GitHub release creation" -FailureHint "If a draft was left behind, preserve and review it. Retry only missing verified assets or select a new version; never delete or overwrite existing release assets."
+    } else {
+        $missing = @(Get-SuiteMissingAssets $assets $existingRelease.assets)
+        if ($missing.Count -gt 0) {
+            $null = Invoke-NativeChecked gh (@("release", "upload", $tag, "--repo", $ghRepository) + $missing) "GitHub release missing asset upload" -FailureHint "Missing-asset upload failed. Existing assets were preserved."
+        } else {
+            Write-Host "All assets already match existing draft $tag."
+        }
+    }
     $verifiedRemote = Get-SuiteRemoteRelease $repository $tag
-    if (-not $verifiedRemote -or $verifiedRemote.tag_name -ne $tag -or @(Get-SuiteMissingAssets $assets $verifiedRemote.assets).Count -ne 0) { throw 'Remote assets are incomplete. Preserve the draft and compare the verified local set before recovery.' }
+    if (-not $verifiedRemote -or $verifiedRemote.tag_name -ne $tag -or $verifiedRemote.draft -ne $true -or $verifiedRemote.prerelease -ne $false -or @($verifiedRemote.assets).Count -ne $assets.Count -or @(Get-SuiteMissingAssets $assets $verifiedRemote.assets).Count -ne 0) { throw 'Remote assets in draft are incomplete. Preserve the draft and compare the verified local set before recovery.' }
     if ($Draft) {
         Write-Host "Draft release $tag is ready at $targetCommit; publish it from GitHub when appropriate."
         return
     }
-    $null = Invoke-NativeChecked gh @("release", "edit", $tag, "--draft=false", "--repo", $ghRepository) "Publishing draft $tag" -FailureHint "Assets were uploaded; preserve and review the draft before manually completing publication."
+    $null = Invoke-NativeChecked gh @("release", "edit", $tag, "--draft=false", "--latest", "--repo", $ghRepository) "Publishing draft $tag" -FailureHint "Assets were uploaded; preserve and review the draft before manually completing publication."
     $published = Get-SuiteRemoteRelease $repository $tag
-    if (-not $published -or $published.draft -ne $false -or @(Get-SuiteMissingAssets $assets $published.assets).Count -ne 0) { throw 'Public release state or assets could not be verified. Preserve the existing release.' }
+    if (-not $published -or $published.tag_name -ne $tag -or $published.draft -ne $false -or $published.prerelease -ne $false -or @($published.assets).Count -ne $assets.Count -or @(Get-SuiteMissingAssets $assets $published.assets).Count -ne 0) { throw 'Public release state or assets could not be verified. Preserve the existing release.' }
 
     Write-Host "Published $tag at $targetCommit"
 } finally {
