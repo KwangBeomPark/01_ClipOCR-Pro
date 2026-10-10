@@ -1,10 +1,6 @@
-﻿*Read this in other languages: [English](README.md), [한국어](README.ko.md), [Polski](README.pl.md)*
+*Read this in other languages: [English](README.md), [한국어](README.ko.md), [Polski](README.pl.md)*
 
 # 📸 ClipOCR-Pro: Office Screen Capture, Multi-Language OCR & Translation Assistant
-
-<p align="center">
-  <img src="./assets/demo.gif" width="900" alt="ClipOCR-Pro Demo">
-</p>
 
 <p align="center">
   <img src="./assets/clipocr_infographic.svg" width="950" alt="ClipOCR-Pro Technical Architecture and Key Performance Pipeline">

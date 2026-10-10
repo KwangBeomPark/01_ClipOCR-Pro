@@ -1,10 +1,6 @@
-﻿*다른 언어로 읽기: [English](README.md), [한국어](README.ko.md), [Polski](README.pl.md)*
+*다른 언어로 읽기: [English](README.md), [한국어](README.ko.md), [Polski](README.pl.md)*
 
 # 📸 ClipOCR-Pro: 업무 증빙 캡처, 다국어 OCR 및 실무 번역 지원 도구
-
-<p align="center">
-  <img src="./assets/demo.gif" width="900" alt="ClipOCR-Pro Demo">
-</p>
 
 <p align="center">
   <img src="./assets/clipocr_infographic.svg" width="950" alt="ClipOCR-Pro 아키텍처 및 핵심 성능 파이프라인 인포그래픽">

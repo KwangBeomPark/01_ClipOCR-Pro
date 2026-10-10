@@ -1,10 +1,6 @@
-﻿*Przeczytaj w innych językach: [English](README.md), [한국어](README.ko.md), [Polski](README.pl.md)*
+*Przeczytaj w innych językach: [English](README.md), [한국어](README.ko.md), [Polski](README.pl.md)*
 
 # 📸 ClipOCR-Pro: Przechwytywanie ekranu, wielojęzyczny OCR i asystent tłumaczeń
-
-<p align="center">
-  <img src="./assets/demo.gif" width="900" alt="ClipOCR-Pro Demo">
-</p>
 
 <p align="center">
   <img src="./assets/clipocr_infographic.svg" width="950" alt="ClipOCR-Pro - Architektura techniczna i kluczowa wydajnosc">
