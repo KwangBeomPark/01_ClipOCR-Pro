@@ -32,6 +32,6 @@ if ($SignToolPath) { $arguments.SignToolPath = $SignToolPath }
 $digest = Get-SuiteSourceDigest $repoRoot
 $null = Assert-SuiteRelease $stage $version $commit $digest -RequireClean
 if ((Test-GitWorkingTreeDirty $repoRoot) -ne $false -or (Get-GitHeadCommit $repoRoot) -ne $commit) { throw 'Source changed while signing; official output was not modified.' }
-$validate = { param($directory) Assert-SuiteRelease $directory $version $commit $digest -RequireClean }.GetNewClosure()
+$validate = { param($directory) Assert-SuiteRelease $directory $version $commit $digest -RequireClean }
 Move-SuiteRelease $repoRoot $stage $target $validate
 Write-Host 'Verified signed local release prepared. Existing versions are preserved in build/release-history. Publication is a separate explicit action.'

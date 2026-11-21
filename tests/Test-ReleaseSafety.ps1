@@ -134,6 +134,8 @@ try {
     }
     $signText = Get-Content -LiteralPath (Join-Path $repoRoot 'scripts\sign_release.ps1') -Raw
     Assert-Test ($signText -notmatch '--clobber|release delete|Start-Service') 'Unsafe signing/publication operation restored.'
+    $releaseText = Get-Content -LiteralPath (Join-Path $repoRoot 'scripts\release.ps1') -Raw
+    Assert-Test ($releaseText -notmatch 'Assert-SuiteRelease[^\r\n]*\.GetNewClosure\(\)') 'release.ps1 validation callback detaches from script-scoped ReleaseSafety functions.'
     $buildText = Get-Content -LiteralPath (Join-Path $repoRoot 'scripts\build.ps1') -Raw
     Assert-Test ($buildText -notmatch 'C:\\Dev\\GitHub\\06_Stepwise') 'Cross-project tool path restored.'
     $publishText = Get-Content -LiteralPath (Join-Path $repoRoot 'scripts\publish.ps1') -Raw
