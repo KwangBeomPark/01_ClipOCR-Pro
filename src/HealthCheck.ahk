@@ -26,6 +26,10 @@ RunHealthCheckSuite(errors) {
     Check(() => CompareSemanticVersions("1.10.0", "1.9.9") == 1, "semantic version comparison")
     Check(() => ExtractSemanticVersion("Release v2.3.4") == "2.3.4", "semantic version extraction")
     Check(() => NormalizeJpegQuality(80) == 80 && NormalizeJpegQuality(85) == 90, "JPG quality normalization")
+    Check(() => NormalizeClipBorderColor("#e53935") == "E53935"
+        && NormalizeClipBorderColor("invalid") == "000000"
+        && NormalizeClipBorderWidth(3) == 3 && NormalizeClipBorderWidth(9) == 1,
+        "clip border color and width normalization")
     Check(() => NormalizeSaveImageFormat("JPG") == "jpg" && NormalizeSaveImageFormat("gif") == "png",
         "save image format normalization")
     Check(() => GetImageSavePresetOptions().Length == 4 && GetImageSavePresetIndex("png", 90) == 1
@@ -162,11 +166,13 @@ RunHealthCheckSuite(errors) {
         }
     }
     Check(() => CheckSettingsSetterFailure(), "settings setters keep runtime state after failed save")
+    Check(() => CheckClipWinBorderGeometry(), "floating clip border geometry across resize and restore")
 }
 
 CheckSettingsSetterFailure() {
     global CONFIG_DIR, CONFIG_FILE, REG_PATH, SAVE_FOLDER, SAVE_FOLDER_SOURCE, AUTO_CLIPBOARD
     global OCR_ENGINE, OCR_LANGUAGES, CLIP_WIDTH, COPY_OUTLINE_ENABLED, JPG_QUALITY
+    global WINDOW_BORDER_COLOR, WINDOW_BORDER_WIDTH
     global SAVE_IMAGE_FORMAT, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_FONT_SIZE
     oldDir := CONFIG_DIR
     oldFile := CONFIG_FILE
@@ -183,7 +189,9 @@ CheckSettingsSetterFailure() {
         OCR_ENGINE := "auto"
         OCR_LANGUAGES := "en-US"
         CLIP_WIDTH := 1200
-        COPY_OUTLINE_ENABLED := true
+        COPY_OUTLINE_ENABLED := false
+        WINDOW_BORDER_COLOR := "000000"
+        WINDOW_BORDER_WIDTH := 1
         JPG_QUALITY := 90
         SAVE_IMAGE_FORMAT := "png"
         TEXT_TRANSLATE_LANG := "ko"
@@ -199,8 +207,12 @@ CheckSettingsSetterFailure() {
             throw Error("OCR languages changed after failed persistence")
         if SetClipWidth(800) || CLIP_WIDTH != 1200
             throw Error("Clipboard width changed after failed persistence")
-        if SetCopyOutline(false) || !COPY_OUTLINE_ENABLED
+        if SetCopyOutline(true) || COPY_OUTLINE_ENABLED
             throw Error("Copy outline changed after failed persistence")
+        if SetClipBorderColor("E53935") || WINDOW_BORDER_COLOR != "000000"
+            throw Error("Clip border color changed after failed persistence")
+        if SetClipBorderWidth(3) || WINDOW_BORDER_WIDTH != 1
+            throw Error("Clip border width changed after failed persistence")
         if SetJpegQuality(70) || JPG_QUALITY != 90
             throw Error("JPEG quality changed after failed persistence")
         if SetSaveImageFormat("jpg") || SAVE_IMAGE_FORMAT != "png"
@@ -216,6 +228,88 @@ CheckSettingsSetterFailure() {
         CONFIG_DIR := oldDir
         CONFIG_FILE := oldFile
         ; Retain the unique fixture as inspection evidence.
+    }
+}
+
+CheckClipWinBorderGeometry() {
+    global WINDOW_BORDER_WIDTH, WINDOW_BORDER_COLOR, ClipWins, MINI_SIZE, MINI_OPACITY
+    hasBorderW := IsSet(WINDOW_BORDER_WIDTH)
+    hasBorderColor := IsSet(WINDOW_BORDER_COLOR)
+    hasClipWins := IsSet(ClipWins)
+    hasMiniSize := IsSet(MINI_SIZE)
+    hasMiniOpacity := IsSet(MINI_OPACITY)
+    oldBorderW := hasBorderW ? WINDOW_BORDER_WIDTH : 1
+    oldBorderColor := hasBorderColor ? WINDOW_BORDER_COLOR : "000000"
+    if !hasClipWins
+        ClipWins := Map()
+    if !hasMiniSize
+        MINI_SIZE := 80
+    if !hasMiniOpacity
+        MINI_OPACITY := 128
+
+    token := 0, bmp1 := 0, bmp2 := 0, hwnd1 := 0, hwnd2 := 0
+    try {
+        try DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+        token := Gdip_Startup()
+        WINDOW_BORDER_WIDTH := 1
+        WINDOW_BORDER_COLOR := "000000"
+        bmp1 := Gdip_CreateBitmap(40, 30)
+        bmp2 := Gdip_CreateBitmap(40, 30)
+        hwnd1 := CreateClipWin(bmp1, 100, 120)
+        bmp1 := 0 ; owned by ClipWins[hwnd1]
+        hwnd2 := CreateClipWin(bmp2, 220, 140)
+        bmp2 := 0 ; owned by ClipWins[hwnd2]
+
+        MinimizeClipWin(hwnd2, ClipWins[hwnd2])
+        if !ClipWins[hwnd2].IsMinimized
+            return false
+
+        WINDOW_BORDER_WIDTH := 5
+        WINDOW_BORDER_COLOR := "E53935"
+        UpdateAllClipWinBorders()
+
+        ; Normal window keeps image top-left at (100, 120) -> window at (95, 115), size (50, 40)
+        WinGetPos(&x1, &y1, &w1, &h1, "ahk_id " hwnd1)
+        ClipWins[hwnd1].picCtrl.GetPos(&px1, &py1)
+        ClipWins[hwnd1].closeBtn.GetPos(&cx1, &cy1)
+        if (x1 + px1 != 100 || y1 + py1 != 120 || w1 != 50 || h1 != 40 || cx1 != 40 + 5 - 16 || cy1 != 5)
+            return false
+
+        ; Minimized window restored after border change keeps image top-left at (220, 140)
+        SCW_RestoreAll()
+        WinGetPos(&x2, &y2, &w2, &h2, "ahk_id " hwnd2)
+        ClipWins[hwnd2].picCtrl.GetPos(&px2, &py2)
+        if (x2 + px2 != 220 || y2 + py2 != 140 || w2 != 50 || h2 != 40)
+            return false
+
+        ; Switch back 5 -> 1 px while minimized via SCW_MinimizeAll / RestoreClipWin path
+        SCW_MinimizeAll()
+        WINDOW_BORDER_WIDTH := 1
+        WINDOW_BORDER_COLOR := "000000"
+        UpdateAllClipWinBorders()
+        RestoreClipWin(hwnd1, ClipWins[hwnd1])
+        RestoreClipWin(hwnd2, ClipWins[hwnd2])
+        WinGetPos(&rx1, &ry1, &rw1, &rh1, "ahk_id " hwnd1)
+        ClipWins[hwnd1].picCtrl.GetPos(&rpx1, &rpy1)
+        ClipWins[hwnd1].closeBtn.GetPos(&rcx1, &rcy1)
+        WinGetPos(&rx2, &ry2, &rw2, &rh2, "ahk_id " hwnd2)
+        ClipWins[hwnd2].picCtrl.GetPos(&rpx2, &rpy2)
+        ClipWins[hwnd2].closeBtn.GetPos(&rcx2, &rcy2)
+        return (rx1 + rpx1 == 100 && ry1 + rpy1 == 120 && rw1 == 42 && rh1 == 32 && rcx1 == 25 && rcy1 == 1
+            && rx2 + rpx2 == 220 && ry2 + rpy2 == 140 && rw2 == 42 && rh2 == 32 && rcx2 == 25 && rcy2 == 1)
+    } finally {
+        if (hwnd1 && ClipWins.Has(hwnd1))
+            try CloseClipWin(ClipWins[hwnd1].gui)
+        if (hwnd2 && ClipWins.Has(hwnd2))
+            try CloseClipWin(ClipWins[hwnd2].gui)
+        if bmp1
+            try Gdip_DisposeImage(bmp1)
+        if bmp2
+            try Gdip_DisposeImage(bmp2)
+        if token
+            try Gdip_Shutdown(token)
+        WINDOW_BORDER_WIDTH := oldBorderW
+        WINDOW_BORDER_COLOR := oldBorderColor
     }
 }
 

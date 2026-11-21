@@ -2,7 +2,7 @@
 ; Standard Per-User installer for PL Suite applications (App01 ~ App10).
 
 #ifndef MyAppVersion
-#define MyAppVersion "1.6.2"
+#define MyAppVersion "1.6.3"
 #endif
 
 #ifndef MyAppExeSource

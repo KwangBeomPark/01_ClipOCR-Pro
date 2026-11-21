@@ -7,7 +7,7 @@
 ; so --health-check and --ocr-file never terminate a running tray instance.
 #SingleInstance Off
 ;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
-;@Ahk2Exe-SetVersion 1.6.2.0
+;@Ahk2Exe-SetVersion 1.6.3.0
 ; CLI modes exit before any window or hotkey exists and must never show a dialog: this runs before
 ; the includes and globals so an error anywhere in startup ends the process with a FAIL line.
 global CLI_MODE := (A_Args.Length > 0 && (A_Args[1] == "--health-check" || A_Args[1] == "--ocr-file")) ? A_Args[1] : ""
@@ -21,7 +21,7 @@ if (CLI_MODE != "")
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
-global APP_VERSION := "1.6.2"
+global APP_VERSION := "1.6.3"
 global APP_ICON_PATH := A_IsCompiled ? A_ScriptFullPath : A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global APP_SOURCE_ICON_PATH := A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global GITHUB_RELEASES_URL := "https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases"
@@ -229,6 +229,7 @@ AppCleanup(*) {
 global MINI_SIZE := 80          ; Minimized window size (px)
 global MINI_OPACITY := 128      ; Minimized opacity (0-255)
 global WINDOW_BORDER_WIDTH := 1 ; Floating capture window border width (px)
+global WINDOW_BORDER_COLOR := "000000" ; Floating capture window border color (RGB hex)
 global ANNOTATION_BORDER_WIDTH := 3 ; Red annotation rectangle width (px)
 global UNDO_MAX := 5            ; Maximum undo steps
 global TEXT_TRANSLATE_MAX_CHARS := 5000 ; Safe maximum length for Google Text Translation GET requests
@@ -240,7 +241,7 @@ global MAIL_ENCODING_FACTOR := 1.37
 ; ── User settings: keep the Registry path name for backward compatibility ──
 global REG_PATH := "HKCU\Software\ScreenClipTool"
 global CLIP_WIDTH := 1000
-global COPY_OUTLINE_ENABLED := true
+global COPY_OUTLINE_ENABLED := false
 global SAVE_IMAGE_FORMAT := "png" ; Ctrl+S output format: jpg or png
 global JPG_QUALITY := 90 ; Ctrl+S JPG save and size-estimate quality
 global TEXT_TRANSLATE_LANG := "ko"
@@ -285,10 +286,18 @@ if TryReadLocalSetting("ClipboardWidth", &savedWidth)
 else
     CLIP_WIDTH := 1000
 
-if TryReadLocalSetting("CopyOutline", &savedOutline)
-    COPY_OUTLINE_ENABLED := NormalizeCopyOutline(savedOutline)
+; Copied and saved images do not add an outline; border styling applies only to floating clip windows.
+COPY_OUTLINE_ENABLED := false
+
+if TryReadLocalSetting("ClipBorderColor", &savedBorderColor)
+    WINDOW_BORDER_COLOR := NormalizeClipBorderColor(savedBorderColor)
 else
-    COPY_OUTLINE_ENABLED := true
+    WINDOW_BORDER_COLOR := "000000"
+
+if TryReadLocalSetting("ClipBorderWidth", &savedBorderWidth)
+    WINDOW_BORDER_WIDTH := NormalizeClipBorderWidth(savedBorderWidth)
+else
+    WINDOW_BORDER_WIDTH := 1
 
 if TryReadLocalSetting("JpegQuality", &savedQuality)
     JPG_QUALITY := NormalizeJpegQuality(savedQuality)
@@ -620,7 +629,7 @@ NormalizeCopyOutline(value) {
         return false
     if (value == "1")
         return true
-    return true
+    return false
 }
 
 NormalizeJpegQuality(value) {
@@ -1053,19 +1062,19 @@ BuildUIStringTable() {
         "fr", "⚠️ Échec de la capture d'écran.",
         "es", "⚠️ Error en la captura de pantalla.")
     t["copy_ok"] := Map(
-        "ko", "✅ 클립보드 복사 완료: {w}×{h}`r`n{format} 예상 {size} ({quality}) | Outline {outline}",
-        "en", "✅ Copied to clipboard: {w}×{h}`r`nEst. {format} {size} ({quality}) | Outline {outline}",
-        "pl", "✅ Skopiowano do schowka: {w}×{h}`r`nSzac. {format} {size} ({quality}) | Kontur {outline}",
-        "de", "✅ In Zwischenablage kopiert: {w}×{h}`r`nGesch. {format} {size} ({quality}) | Kontur {outline}",
-        "fr", "✅ Copié dans le presse-papiers : {w}×{h}`r`n{format} est. {size} ({quality}) | Contour {outline}",
-        "es", "✅ Copiado al portapapeles: {w}×{h}`r`n{format} est. {size} ({quality}) | Contorno {outline}")
+        "ko", "✅ 클립보드 복사 완료: {w}×{h}`r`n{format} 예상 {size} ({quality})",
+        "en", "✅ Copied to clipboard: {w}×{h}`r`nEst. {format} {size} ({quality})",
+        "pl", "✅ Skopiowano do schowka: {w}×{h}`r`nSzac. {format} {size} ({quality})",
+        "de", "✅ In Zwischenablage kopiert: {w}×{h}`r`nGesch. {format} {size} ({quality})",
+        "fr", "✅ Copié dans le presse-papiers : {w}×{h}`r`n{format} est. {size} ({quality})",
+        "es", "✅ Copiado al portapapeles: {w}×{h}`r`n{format} est. {size} ({quality})")
     t["copy_savewarn"] := Map(
-        "ko", "`r`n⚠️ 가로폭 설정을 Registry에 저장하지 못했습니다.",
-        "en", "`r`n⚠️ Could not save the width setting to the Registry.",
-        "pl", "`r`n⚠️ Nie udało się zapisać ustawienia szerokości w rejestrze.",
-        "de", "`r`n⚠️ Breiteneinstellung konnte nicht in der Registry gespeichert werden.",
-        "fr", "`r`n⚠️ Impossible d'enregistrer le réglage de largeur dans le Registre.",
-        "es", "`r`n⚠️ No se pudo guardar el ajuste de ancho en el Registro.")
+        "ko", "`r`n⚠️ 가로폭 설정을 저장하지 못했습니다.",
+        "en", "`r`n⚠️ Could not save the width setting.",
+        "pl", "`r`n⚠️ Nie udało się zapisać ustawienia szerokości.",
+        "de", "`r`n⚠️ Breiteneinstellung konnte nicht gespeichert werden.",
+        "fr", "`r`n⚠️ Impossible d'enregistrer le réglage de largeur.",
+        "es", "`r`n⚠️ No se pudo guardar el ajuste de ancho.")
     t["size_unknown"] := Map(
         "ko", "확인 불가", "en", "unknown", "pl", "nieznany",
         "de", "unbekannt", "fr", "inconnu", "es", "desconocido")
@@ -1809,22 +1818,24 @@ DrawVectorPreview(bgColor := "Red") {
  * @returns {Integer} 생성된 GUI 윈도우의 HWND / The created window's HWND handle
  */
 CreateClipWin(pBitmap, x, y) {
+    global WINDOW_BORDER_WIDTH, WINDOW_BORDER_COLOR, ClipWins
+    b := WINDOW_BORDER_WIDTH
     ClipGui := Gui("-Caption +ToolWindow +AlwaysOnTop +OwnDialogs -DPIScale", "ScreenClippingWindow")
     ClipGui.MarginX := 0
     ClipGui.MarginY := 0
-    ClipGui.BackColor := "000000" ; Thin black window border
+    ClipGui.BackColor := WINDOW_BORDER_COLOR ; Floating capture window border color
 
     W := Gdip_GetImageWidth(pBitmap)
     H := Gdip_GetImageHeight(pBitmap)
 
     hBitmap := Gdip_CreateHBITMAPFromBitmap(pBitmap)
-    Pic := ClipGui.Add("Picture", "x" WINDOW_BORDER_WIDTH " y" WINDOW_BORDER_WIDTH " w" W " h" H, "HBITMAP:*" hBitmap)
+    Pic := ClipGui.Add("Picture", "x" b " y" b " w" W " h" H, "HBITMAP:*" hBitmap)
     DllCall("DeleteObject", "ptr", hBitmap)
 
     ; Add a tiny close button in the top right
     CloseBtnSize := 16
-    CloseBtnX := W + (WINDOW_BORDER_WIDTH * 2) - CloseBtnSize - 1
-    CloseBtnY := 1
+    CloseBtnX := W + b - CloseBtnSize
+    CloseBtnY := b
     CloseBtn := ClipGui.Add("Text", "x" CloseBtnX " y" CloseBtnY " w" CloseBtnSize " h" CloseBtnSize " Center +BackgroundTrans cWhite +0x200",
         "×")
     CloseBtn.SetFont("s14 Bold")
@@ -1853,13 +1864,13 @@ CreateClipWin(pBitmap, x, y) {
     NumText := ClipGui.Add("Text", "x0 y0 w80 h80 Center 0x200 +BackgroundTrans cYellow Hidden", assignedId)
     NumText.SetFont("s24 Bold", "Verdana")
 
-    ClipGui.Show("x" (x - WINDOW_BORDER_WIDTH) " y" (y - WINDOW_BORDER_WIDTH) " w" (W + WINDOW_BORDER_WIDTH * 2) " h" (H + WINDOW_BORDER_WIDTH * 2) " NA"
+    ClipGui.Show("x" (x - b) " y" (y - b) " w" (W + b * 2) " h" (H + b * 2) " NA"
     )
 
     hwnd := ClipGui.Hwnd
-    ClipWins[hwnd] := { pBitmap: pBitmap, w: W, h: H, gui: ClipGui, IsMinimized: false, id: assignedId, NumText: NumText,
-        NumBg: NumBg,
-        picCtrl: Pic, UndoStack: [], AnnotSeq: 1, orgX: x - WINDOW_BORDER_WIDTH, orgY: y - WINDOW_BORDER_WIDTH }
+    ClipWins[hwnd] := { pBitmap: pBitmap, w: W, h: H, borderW: b, gui: ClipGui, IsMinimized: false, id: assignedId, NumText: NumText,
+        NumBg: NumBg, closeBtn: CloseBtn,
+        picCtrl: Pic, UndoStack: [], AnnotSeq: 1, orgX: x - b, orgY: y - b }
 
     ; Mouse message handlers (WM_LBUTTONDOWN/DBLCLK/RBUTTONDOWN) are registered once at startup.
 
@@ -1867,6 +1878,69 @@ CreateClipWin(pBitmap, x, y) {
 
     UpdateTrayTip()
     return hwnd
+}
+
+UpdateClipWinBorder(hwnd, winInfo) {
+    global WINDOW_BORDER_WIDTH, WINDOW_BORDER_COLOR
+    newB := WINDOW_BORDER_WIDTH
+    oldB := winInfo.HasProp("borderW") ? winInfo.borderW : newB
+    delta := newB - oldB
+
+    if !winInfo.IsMinimized {
+        WinGetPos(&curX, &curY, , , "ahk_id " hwnd)
+        newX := curX - delta
+        newY := curY - delta
+    } else {
+        newX := winInfo.orgX - delta
+        newY := winInfo.orgY - delta
+    }
+
+    winInfo.gui.BackColor := WINDOW_BORDER_COLOR
+    winInfo.picCtrl.Move(newB, newB, winInfo.w, winInfo.h)
+    if (winInfo.HasProp("closeBtn") && IsObject(winInfo.closeBtn))
+        winInfo.closeBtn.Move(winInfo.w + newB - 16, newB, 16, 16)
+
+    winInfo.orgX := newX
+    winInfo.orgY := newY
+    winInfo.borderW := newB
+
+    if !winInfo.IsMinimized
+        WinMove(newX, newY, winInfo.w + newB * 2, winInfo.h + newB * 2, "ahk_id " hwnd)
+    WinRedraw("ahk_id " hwnd)
+}
+
+UpdateAllClipWinBorders() {
+    global ClipWins
+    for hwnd, winInfo in ClipWins {
+        try UpdateClipWinBorder(hwnd, winInfo)
+    }
+}
+
+MinimizeClipWin(hwnd, winInfo) {
+    global MINI_SIZE, MINI_OPACITY
+    if winInfo.IsMinimized
+        return
+    WinGetPos(&oX, &oY, , , "ahk_id " hwnd)
+    winInfo.orgX := oX
+    winInfo.orgY := oY
+    WinMove(, , MINI_SIZE, MINI_SIZE, "ahk_id " hwnd)
+    WinSetTransparent(MINI_OPACITY, "ahk_id " hwnd)
+    winInfo.NumBg.Visible := true
+    winInfo.NumText.Visible := true
+    winInfo.NumText.Redraw()
+    winInfo.IsMinimized := true
+}
+
+RestoreClipWin(hwnd, winInfo) {
+    global WINDOW_BORDER_WIDTH
+    if !winInfo.IsMinimized
+        return
+    b := winInfo.HasProp("borderW") ? winInfo.borderW : WINDOW_BORDER_WIDTH
+    WinMove(winInfo.orgX, winInfo.orgY, winInfo.w + b * 2, winInfo.h + b * 2, "ahk_id " hwnd)
+    WinSetTransparent("Off", "ahk_id " hwnd)
+    winInfo.NumText.Visible := false
+    winInfo.NumBg.Visible := false
+    winInfo.IsMinimized := false
 }
 
 CloseClipWin(guiObj) {
@@ -1932,24 +2006,10 @@ WM_LBUTTONDOWN(wParam, lParam, msg, hwnd) {
     if isDoubleClick {
         LastClickTime := 0 ; Reset
 
-        if winInfo.IsMinimized {
-            ; Restore original size.
-            WinMove(winInfo.orgX, winInfo.orgY, winInfo.w + WINDOW_BORDER_WIDTH * 2, winInfo.h + WINDOW_BORDER_WIDTH * 2, hwnd)
-            WinSetTransparent("Off", hwnd)
-            winInfo.NumText.Visible := false
-            winInfo.NumBg.Visible := false
-            winInfo.IsMinimized := false
-        } else {
-            WinGetPos(&oX, &oY, , , "ahk_id " hwnd)
-            winInfo.orgX := oX
-            winInfo.orgY := oY
-            WinMove(, , MINI_SIZE, MINI_SIZE, hwnd)
-            WinSetTransparent(MINI_OPACITY, hwnd) ; Set 50% opacity.
-            winInfo.NumBg.Visible := true ; Show the black background slightly.
-            winInfo.NumText.Visible := true
-            winInfo.NumText.Redraw()
-            winInfo.IsMinimized := true
-        }
+        if winInfo.IsMinimized
+            RestoreClipWin(hwnd, winInfo)
+        else
+            MinimizeClipWin(hwnd, winInfo)
         return
     }
 
@@ -2019,12 +2079,16 @@ SCW_ApplyAnnotation(hwnd, mode) {
         if !clone
             throw Error("Could not create undo image")
 
+        picOffsetX := winInfo.HasProp("borderW") ? winInfo.borderW : WINDOW_BORDER_WIDTH
+        picOffsetY := picOffsetX
+        try winInfo.picCtrl.GetPos(&picOffsetX, &picOffsetY)
+
         if (mode == "Text" || mode == "Number") {
-            rectX := clickX - (winX + WINDOW_BORDER_WIDTH)
-            rectY := clickY - (winY + WINDOW_BORDER_WIDTH)
+            rectX := clickX - (winX + picOffsetX)
+            rectY := clickY - (winY + picOffsetY)
         } else if (isRectMode) {
-            rectX := rect.x - (winX + WINDOW_BORDER_WIDTH)
-            rectY := rect.y - (winY + WINDOW_BORDER_WIDTH)
+            rectX := rect.x - (winX + picOffsetX)
+            rectY := rect.y - (winY + picOffsetY)
         }
         ; Arrow computes its own endpoint coordinates in the drawing branch below.
 
@@ -2095,10 +2159,10 @@ SCW_ApplyAnnotation(hwnd, mode) {
             pPen := Gdip_CreatePen("0xFFFF0000", ANNOTATION_BORDER_WIDTH)
             if !pPen
                 throw Error("Could not create pen")
-            ax1 := vec.x1 - (winX + WINDOW_BORDER_WIDTH)
-            ay1 := vec.y1 - (winY + WINDOW_BORDER_WIDTH)
-            ax2 := vec.x2 - (winX + WINDOW_BORDER_WIDTH)
-            ay2 := vec.y2 - (winY + WINDOW_BORDER_WIDTH)
+            ax1 := vec.x1 - (winX + picOffsetX)
+            ay1 := vec.y1 - (winY + picOffsetY)
+            ax2 := vec.x2 - (winX + picOffsetX)
+            ay2 := vec.y2 - (winY + picOffsetY)
             Gdip_DrawLine(pGraphics, pPen, ax1, ay1, ax2, ay2)
             ; Arrowhead: two short lines drawn back from the tip.
             adx := ax2 - ax1, ady := ay2 - ay1
@@ -2191,13 +2255,13 @@ SCW_Win2File() {
 }
 
 CopyBitmapToClipboard(pBitmap, settingsSaved := true) {
-    global CLIP_WIDTH, COPY_OUTLINE_ENABLED, SAVE_IMAGE_FORMAT, JPG_QUALITY
+    global CLIP_WIDTH, SAVE_IMAGE_FORMAT, JPG_QUALITY
     pOutput := 0
     try {
         if !pBitmap
             throw Error("Invalid bitmap")
 
-        pOutput := CreateOutputBitmap(pBitmap, CLIP_WIDTH, COPY_OUTLINE_ENABLED)
+        pOutput := CreateOutputBitmap(pBitmap, CLIP_WIDTH, false)
         if !pOutput
             throw Error("Could not prepare image")
 
@@ -2208,10 +2272,9 @@ CopyBitmapToClipboard(pBitmap, settingsSaved := true) {
         sizeText := estimatedBytes >= 0 ? Format("{:.2f} MB", estimatedBytes / 1048576) : UIText("size_unknown")
         formatText := StrUpper(SAVE_IMAGE_FORMAT)
         qualityText := SAVE_IMAGE_FORMAT == "jpg" ? JPG_QUALITY "%" : UIText("lossless")
-        outlineText := COPY_OUTLINE_ENABLED ? "ON" : "OFF"
         saveWarning := settingsSaved ? "" : UIText("copy_savewarn")
         ToolTip(UIText("copy_ok", Map("w", finalW, "h", finalH, "format", formatText, "size", sizeText,
-            "quality", qualityText, "outline", outlineText)) saveWarning)
+            "quality", qualityText)) saveWarning)
         SetTimer(() => ToolTip(), -3000)
     } catch as e {
         ToolTip(UIText("copy_failed", Map("error", ShortErrorMessage(e.Message))))
@@ -2223,12 +2286,12 @@ CopyBitmapToClipboard(pBitmap, settingsSaved := true) {
 }
 
 SaveBitmapToDesktop(pBitmap) {
-    global CLIP_WIDTH, COPY_OUTLINE_ENABLED, SAVE_IMAGE_FORMAT, JPG_QUALITY
+    global CLIP_WIDTH, SAVE_IMAGE_FORMAT, JPG_QUALITY
     pOutput := 0
     try {
         if !pBitmap
             throw Error("Invalid bitmap")
-        pOutput := CreateOutputBitmap(pBitmap, CLIP_WIDTH, COPY_OUTLINE_ENABLED)
+        pOutput := CreateOutputBitmap(pBitmap, CLIP_WIDTH, false)
         if !pOutput
             throw Error("Could not prepare image")
         TodayDate := FormatTime(, "yyyy-MM-dd_HHmmss")
@@ -2330,6 +2393,14 @@ ExtractTextFromRightClickedClip(*) {
     }
 }
 
+GetOcrTranslateTargetText(editCtrl) {
+    selected := ""
+    try selected := Trim(EditGetSelectedText(editCtrl), "`r`n `t")
+    if (selected != "")
+        return selected
+    return Trim(editCtrl.Value, "`r`n `t")
+}
+
 ShowOcrResultPopup(text, engine, language, warning := "") {
     global OcrResultPopupHwnd, APP_NAME
     if (OcrResultPopupHwnd && WinExist("ahk_id " OcrResultPopupHwnd))
@@ -2344,12 +2415,35 @@ ShowOcrResultPopup(text, engine, language, warning := "") {
     resultGui.Add("Text", "xm y+4 w620 h32 c666666", details)
     resultEdit := resultGui.Add("Edit", "xm y+6 w620 h300 ReadOnly Multi WantTab", text)
     copyBtn := resultGui.Add("Button", "xm y+10 w110 h30 Default", "Copy Text")
+    translateBtn := resultGui.Add("Button", "x+10 yp w120 h30", "🌐 Translate")
     closeBtn := resultGui.Add("Button", "x+10 yp w90 h30", "Close")
 
     CopyResult(*) {
         A_Clipboard := resultEdit.Value
         ToolTip("✅ OCR text copied.")
         SetTimer(() => ToolTip(), -1500)
+    }
+    TranslateResult(*) {
+        global TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_MAX_CHARS
+        ocrText := GetOcrTranslateTargetText(resultEdit)
+        if (ocrText == "") {
+            ShowTimedTooltip("⚠️ 번역할 텍스트가 없습니다.`r`n⚠️ No text to translate.", 2500)
+            return
+        }
+        if (StrLen(ocrText) > TEXT_TRANSLATE_MAX_CHARS) {
+            ShowTimedTooltip("⚠️ 텍스트가 " TEXT_TRANSLATE_MAX_CHARS "자를 초과합니다. 일부만 드래그해 선택한 뒤 다시 눌러 주세요.`r`n⚠️ Text exceeds " TEXT_TRANSLATE_MAX_CHARS " chars. Select a shorter part and try again.", 3500)
+            return
+        }
+        if !EnsureTranslationConsent()
+            return
+        try {
+            ToolTip(UIText("translating"))
+            translatedText := TranslateTextViaGoogle(ocrText, TEXT_TRANSLATE_LANG)
+            ToolTip()
+            ShowTextTranslationPopup(ocrText, translatedText)
+        } catch as e {
+            ShowTimedTooltip(UIText("translate_failed", Map("error", ShortErrorMessage(e.Message))), 3500)
+        }
     }
     DestroyResult(*) {
         global OcrResultPopupHwnd
@@ -2361,10 +2455,12 @@ ShowOcrResultPopup(text, engine, language, warning := "") {
             return
         resultEdit.Move(, , Max(300, width - 30), Max(150, height - 115))
         copyBtn.Move(, height - 42)
+        translateBtn.Move(, height - 42)
         closeBtn.Move(, height - 42)
     }
 
     copyBtn.OnEvent("Click", CopyResult)
+    translateBtn.OnEvent("Click", TranslateResult)
     closeBtn.OnEvent("Click", DestroyResult)
     resultGui.OnEvent("Close", DestroyResult)
     resultGui.OnEvent("Escape", DestroyResult)
@@ -2576,6 +2672,106 @@ SetCopyOutline(enabled) {
     return true
 }
 
+GetClipBorderColorOptions() {
+    return [
+        { label: "Black (#000000)", color: "000000" },
+        { label: "Dark Gray (#666666)", color: "666666" },
+        { label: "Light Gray (#CCCCCC)", color: "CCCCCC" },
+        { label: "Red (#E53935)", color: "E53935" },
+        { label: "Blue (#1E88E5)", color: "1E88E5" },
+        { label: "Green (#43A047)", color: "43A047" }
+    ]
+}
+
+GetClipBorderColorLabels() {
+    labels := []
+    for _, opt in GetClipBorderColorOptions()
+        labels.Push(opt.label)
+    return labels
+}
+
+NormalizeClipBorderColor(value) {
+    cleaned := StrUpper(RegExReplace(Trim(String(value)), "^#"))
+    for _, opt in GetClipBorderColorOptions() {
+        if (opt.color == cleaned)
+            return opt.color
+    }
+    return "000000"
+}
+
+GetClipBorderColorIndex(color) {
+    normalized := NormalizeClipBorderColor(color)
+    for idx, opt in GetClipBorderColorOptions() {
+        if (opt.color == normalized)
+            return idx
+    }
+    return 1
+}
+
+GetClipBorderColorFromLabel(label) {
+    for _, opt in GetClipBorderColorOptions() {
+        if (opt.label == label)
+            return opt.color
+    }
+    return "000000"
+}
+
+GetClipBorderWidthOptions() {
+    return [
+        { label: "1 px", width: 1 },
+        { label: "2 px", width: 2 },
+        { label: "3 px", width: 3 },
+        { label: "4 px", width: 4 },
+        { label: "5 px", width: 5 }
+    ]
+}
+
+GetClipBorderWidthLabels() {
+    labels := []
+    for _, opt in GetClipBorderWidthOptions()
+        labels.Push(opt.label)
+    return labels
+}
+
+NormalizeClipBorderWidth(value) {
+    try width := Integer(value)
+    catch
+        return 1
+    return (width >= 1 && width <= 5) ? width : 1
+}
+
+GetClipBorderWidthIndex(width) {
+    return NormalizeClipBorderWidth(width)
+}
+
+GetClipBorderWidthFromLabel(label) {
+    if RegExMatch(label, "^(\d+)", &m)
+        return NormalizeClipBorderWidth(m[1])
+    return 1
+}
+
+SetClipBorderColor(color, updateWindows := true) {
+    global WINDOW_BORDER_COLOR, REG_PATH
+    value := NormalizeClipBorderColor(color)
+    if !SafeRegWriteString(value, REG_PATH, "ClipBorderColor")
+        return false
+    WINDOW_BORDER_COLOR := value
+    if updateWindows
+        UpdateAllClipWinBorders()
+    return true
+}
+
+SetClipBorderWidth(width, updateWindows := true) {
+    global WINDOW_BORDER_WIDTH, REG_PATH
+    value := NormalizeClipBorderWidth(width)
+    if !SafeRegWriteString(value, REG_PATH, "ClipBorderWidth")
+        return false
+    WINDOW_BORDER_WIDTH := value
+    if updateWindows
+        UpdateAllClipWinBorders()
+    return true
+}
+
 SetJpegQuality(quality) {
     global JPG_QUALITY, REG_PATH
     value := NormalizeJpegQuality(quality)
@@ -2608,7 +2804,7 @@ ApplyImageSavePreset(presetIndex, showFeedback := true) {
     UpdateImageSavePresetMenu()
 
     if showFeedback {
-        saveWarning := (formatSaved && qualitySaved) ? "" : "`r`n⚠️ Could not save this preset to the Registry."
+        saveWarning := (formatSaved && qualitySaved) ? "" : "`r`n⚠️ Could not save this preset."
         ToolTip("✅ Image preset: " preset.label saveWarning)
         SetTimer(() => ToolTip(), -3000)
     }
@@ -3391,9 +3587,9 @@ SwitchDashboardPanel(tabIndex, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPan
     }
 }
 
-SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipboardChk, initialAutoClipboard,
-    FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit, saveFolderChosen, OcrEngineCombo,
-    initialOcrEngine, OcrLanguagesEdit, initialOcrLanguages) {
+SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, BorderColorCombo, BorderWidthCombo, initialBorderColor,
+    initialBorderWidth, AutoClipboardChk, initialAutoClipboard, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs,
+    SaveFolderEdit, saveFolderChosen, OcrEngineCombo, initialOcrEngine, OcrLanguagesEdit, initialOcrLanguages) {
     global IMAGE_TRANSLATE_LANGS, REG_PATH
     ; Returns the list of settings that could not be saved (empty means everything succeeded).
     problems := []
@@ -3433,8 +3629,23 @@ SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipb
     if !SetJpegQuality(selectedPreset.quality)
         problems.Push("Image quality / 이미지 품질")
     UpdateImageSavePresetMenu()
-    if !SetCopyOutline(OutlineChk.Value)
-        problems.Push("Outline / 외곽선")
+    selectedBorderColor := GetClipBorderColorFromLabel(BorderColorCombo.Text)
+    selectedBorderWidth := GetClipBorderWidthFromLabel(BorderWidthCombo.Text)
+    borderChanged := false
+    if (selectedBorderColor != initialBorderColor) {
+        if !SetClipBorderColor(selectedBorderColor, false)
+            problems.Push("Clip border color / 캡처 창 테두리 색상")
+        else
+            borderChanged := true
+    }
+    if (selectedBorderWidth != initialBorderWidth) {
+        if !SetClipBorderWidth(selectedBorderWidth, false)
+            problems.Push("Clip border size / 캡처 창 테두리 두께")
+        else
+            borderChanged := true
+    }
+    if borderChanged
+        UpdateAllClipWinBorders()
     if !SetTextTranslateFontSize(FontSizeEdit.Value)
         problems.Push("Translate font size / 번역 글꼴 크기")
     if !SetTextTranslateHotkey(GetTextTranslateHotkeyByLabel(HotkeyCombo.Text))
@@ -3466,7 +3677,7 @@ SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipb
 }
 
 ShowDashboardDialog() {
-    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_WIDTH, COPY_OUTLINE_ENABLED, AUTO_CLIPBOARD, SAVE_IMAGE_FORMAT, JPG_QUALITY, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, OCR_ENGINE, OCR_LANGUAGES, bmcBtnPath, ENABLE_BMC_AUTO_DOWNLOAD
+    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_WIDTH, WINDOW_BORDER_WIDTH, WINDOW_BORDER_COLOR, AUTO_CLIPBOARD, SAVE_IMAGE_FORMAT, JPG_QUALITY, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, OCR_ENGINE, OCR_LANGUAGES, bmcBtnPath, ENABLE_BMC_AUTO_DOWNLOAD
 
     if (DashboardHwnd && WinExist("ahk_id " DashboardHwnd)) {
         WinActivate("ahk_id " DashboardHwnd)
@@ -3499,7 +3710,7 @@ ShowDashboardDialog() {
     TabGenBtn := DashGui.Add("Text", "x10 y60 w140 h40 +0x200 Center +BackgroundTrans cWhite Background3F3F46", "⚙️ General")
     TabGenBtn.SetFont("s10 Bold", "Segoe UI")
 
-    TabTrnBtn := DashGui.Add("Text", "x10 y110 w140 h40 +0x200 Center +BackgroundTrans cGray", "🌐 Translation")
+    TabTrnBtn := DashGui.Add("Text", "x10 y110 w140 h40 +0x200 Center +BackgroundTrans cGray", "🌐 Translate && OCR")
     TabTrnBtn.SetFont("s10 Bold", "Segoe UI")
 
     TabAbtBtn := DashGui.Add("Text", "x10 y160 w140 h40 +0x200 Center +BackgroundTrans cGray", "ℹ️ About")
@@ -3513,7 +3724,7 @@ ShowDashboardDialog() {
 
     ; 1. General Panel
     GenPanel := []
-    lbl1 := DashGui.Add("Text", "x180 y60 w580 h22 +BackgroundTrans cFFFFFF", "Image Output Defaults")
+    lbl1 := DashGui.Add("Text", "x180 y60 w580 h22 +BackgroundTrans cFFFFFF", "Capture && Image Defaults")
     lbl1.SetFont("s10 Bold")
     GenPanel.Push(lbl1)
 
@@ -3526,47 +3737,32 @@ ShowDashboardDialog() {
         JPG_QUALITY), GetImageSavePresetLabels())
     GenPanel.Push(PresetCombo)
 
-    OutlineChk := DashGui.Add("CheckBox", "x180 y162 w285 h28 Background1E1E24 cCCCCCC" (COPY_OUTLINE_ENABLED ? " Checked" : ""),
-        " Add 1px black outline")
-    GenPanel.Push(OutlineChk)
+    GenPanel.Push(DashGui.Add("Text", "x180 y166 w190 h22 +BackgroundTrans cCCCCCC", "Clip Border (Color / Size)"))
+    initialBorderColor := WINDOW_BORDER_COLOR
+    BorderColorCombo := DashGui.Add("DropDownList", "x380 y162 w230 Choose" GetClipBorderColorIndex(WINDOW_BORDER_COLOR),
+        GetClipBorderColorLabels())
+    GenPanel.Push(BorderColorCombo)
+    initialBorderWidth := WINDOW_BORDER_WIDTH
+    BorderWidthCombo := DashGui.Add("DropDownList", "x620 y162 w140 Choose" GetClipBorderWidthIndex(WINDOW_BORDER_WIDTH),
+        GetClipBorderWidthLabels())
+    GenPanel.Push(BorderWidthCombo)
+
     initialAutoClipboard := AUTO_CLIPBOARD
-    AutoClipboardChk := DashGui.Add("CheckBox", "x470 y162 w290 h28 Background1E1E24 cCCCCCC" (AUTO_CLIPBOARD ? " Checked" : ""),
-        " Auto-copy new captures")
+    AutoClipboardChk := DashGui.Add("CheckBox", "x180 y198 w380 h26 Background1E1E24 cCCCCCC" (AUTO_CLIPBOARD ? " Checked" : ""),
+        " Auto-copy new captures to clipboard")
     GenPanel.Push(AutoClipboardChk)
 
-    GenPanel.Push(DashGui.Add("Text", "x180 y200 w580 h1 Background3F3F46", ""))
-
-    lblTextSize := DashGui.Add("Text", "x180 y215 w580 h22 +BackgroundTrans cFFFFFF", "Selected Text Translation")
-    lblTextSize.SetFont("s10 Bold")
-    GenPanel.Push(lblTextSize)
-
-    GenPanel.Push(DashGui.Add("Text", "x180 y248 w180 h22 +BackgroundTrans cCCCCCC", "Translate Font Size"))
-    FontSizeEdit := DashGui.Add("Edit", "x380 y244 w80 h24 Number", TEXT_TRANSLATE_FONT_SIZE)
-    GenPanel.Push(FontSizeEdit)
-
-    GenPanel.Push(DashGui.Add("Text", "x180 y282 w580 h1 Background3F3F46", ""))
-
-    lbl2 := DashGui.Add("Text", "x180 y298 w580 h22 +BackgroundTrans cFFFFFF", "System Settings")
-    lbl2.SetFont("s10 Bold")
-    GenPanel.Push(lbl2)
-    GenPanel.Push(DashGui.Add("Text", "x180 y328 w580 h58 Background2A2D3C", ""))
-    isStartup := IsStartupEnabled()
-    StartupChk := DashGui.Add("CheckBox", "x195 y336 w550 h24 Background2A2D3C cWhite" (isStartup ? " Checked" : ""), "  Run app when Windows starts")
-    StartupChk.SetFont("s10 Bold", "Segoe UI")
-    GenPanel.Push(StartupChk)
-    GenPanel.Push(DashGui.Add("Text", "x198 y362 w540 h18 Background2A2D3C cA0A0A0", "Creates a Startup folder shortcut after Save and Close."))
-
     ; Save location (Ctrl+S destination)
-    GenPanel.Push(DashGui.Add("Text", "x180 y398 w580 h1 Background3F3F46", ""))
-    lblSave := DashGui.Add("Text", "x180 y410 w580 h22 +BackgroundTrans cFFFFFF", "Save to File (Ctrl+S)")
+    GenPanel.Push(DashGui.Add("Text", "x180 y236 w580 h1 Background3F3F46", ""))
+    lblSave := DashGui.Add("Text", "x180 y250 w580 h22 +BackgroundTrans cFFFFFF", "Save to File (Ctrl+S)")
     lblSave.SetFont("s10 Bold")
     GenPanel.Push(lblSave)
-    GenPanel.Push(DashGui.Add("Text", "x180 y442 w110 h22 +BackgroundTrans cCCCCCC", "Save Folder"))
+    GenPanel.Push(DashGui.Add("Text", "x180 y282 w110 h22 +BackgroundTrans cCCCCCC", "Save Folder"))
     initialSaveFolder := GetSaveFolder()
     saveFolderChosen := false
-    SaveFolderEdit := DashGui.Add("Edit", "x295 y438 w305 h24 ReadOnly", initialSaveFolder)
+    SaveFolderEdit := DashGui.Add("Edit", "x295 y278 w305 h24 ReadOnly", initialSaveFolder)
     GenPanel.Push(SaveFolderEdit)
-    BrowseSaveBtn := DashGui.Add("Button", "x610 y437 w150 h26", "📁 Browse…")
+    BrowseSaveBtn := DashGui.Add("Button", "x610 y277 w150 h26", "📁 Browse…")
     GenPanel.Push(BrowseSaveBtn)
 
     BrowseSaveFolder(*) {
@@ -3578,6 +3774,18 @@ ShowDashboardDialog() {
     }
     BrowseSaveBtn.OnEvent("Click", BrowseSaveFolder)
 
+    GenPanel.Push(DashGui.Add("Text", "x180 y320 w580 h1 Background3F3F46", ""))
+
+    lbl2 := DashGui.Add("Text", "x180 y334 w580 h22 +BackgroundTrans cFFFFFF", "System Settings")
+    lbl2.SetFont("s10 Bold")
+    GenPanel.Push(lbl2)
+    GenPanel.Push(DashGui.Add("Text", "x180 y364 w580 h58 Background2A2D3C", ""))
+    isStartup := IsStartupEnabled()
+    StartupChk := DashGui.Add("CheckBox", "x195 y372 w550 h24 Background2A2D3C cWhite" (isStartup ? " Checked" : ""), "  Run app when Windows starts")
+    StartupChk.SetFont("s10 Bold", "Segoe UI")
+    GenPanel.Push(StartupChk)
+    GenPanel.Push(DashGui.Add("Text", "x198 y398 w540 h18 Background2A2D3C cA0A0A0", "Creates a Startup folder shortcut after Save and Close."))
+
     ; 2. Translation Panel
     TrnPanel := []
     lbl3 := DashGui.Add("Text", "x180 y60 w580 h22 +BackgroundTrans cFFFFFF", "Text Translation Default")
@@ -3588,21 +3796,24 @@ ShowDashboardDialog() {
     HotkeyCombo := DashGui.Add("DropDownList", "x360 y86 w390 Choose" GetTextTranslateHotkeyIndex(TEXT_TRANSLATE_HOTKEY), GetTextTranslateHotkeyLabels())
     TrnPanel.Push(HotkeyCombo)
 
-    TrnPanel.Push(DashGui.Add("Text", "x180 y132 w180 h22 +BackgroundTrans cCCCCCC", "Target Language"))
-    LangCombo := DashGui.Add("DropDownList", "x360 y128 w390 Choose" GetTextTranslateLangIndex(TEXT_TRANSLATE_LANG), GetTextTranslateLangLabels())
+    TrnPanel.Push(DashGui.Add("Text", "x180 y126 w180 h22 +BackgroundTrans cCCCCCC", "Target Language"))
+    LangCombo := DashGui.Add("DropDownList", "x360 y122 w235 Choose" GetTextTranslateLangIndex(TEXT_TRANSLATE_LANG), GetTextTranslateLangLabels())
     TrnPanel.Push(LangCombo)
+    TrnPanel.Push(DashGui.Add("Text", "x608 y126 w65 h22 +BackgroundTrans cCCCCCC", "Font Size"))
+    FontSizeEdit := DashGui.Add("Edit", "x675 y122 w75 h24 Number", TEXT_TRANSLATE_FONT_SIZE)
+    TrnPanel.Push(FontSizeEdit)
 
-    TrnPanel.Push(DashGui.Add("Text", "x180 y180 w580 h1 Background3F3F46", ""))
+    TrnPanel.Push(DashGui.Add("Text", "x180 y162 w580 h1 Background3F3F46", ""))
 
-    lbl4 := DashGui.Add("Text", "x180 y195 w580 h22 +BackgroundTrans cFFFFFF", "Image Translate Menu Languages (Multi-select)")
+    lbl4 := DashGui.Add("Text", "x180 y176 w580 h22 +BackgroundTrans cFFFFFF", "Image Translate Menu Languages (Multi-select)")
     lbl4.SetFont("s10 Bold")
     TrnPanel.Push(lbl4)
-    LV_ImageLangs := DashGui.Add("ListView", "x180 y225 w470 h180 +Checked -Hdr Background2D2D35 cE0E0E0", ["Language"])
+    LV_ImageLangs := DashGui.Add("ListView", "x180 y206 w470 h195 +Checked -Hdr Background2D2D35 cE0E0E0", ["Language"])
     LV_ImageLangs.SetFont("s9", "Segoe UI")
     TrnPanel.Push(LV_ImageLangs)
 
-    UpBtn := DashGui.Add("Button", "x660 y225 w100 h30", "▲ Up")
-    DownBtn := DashGui.Add("Button", "x660 y265 w100 h30", "▼ Down")
+    UpBtn := DashGui.Add("Button", "x660 y206 w100 h30", "▲ Up")
+    DownBtn := DashGui.Add("Button", "x660 y246 w100 h30", "▼ Down")
     TrnPanel.Push(UpBtn)
     TrnPanel.Push(DownBtn)
 
@@ -3769,7 +3980,7 @@ ShowDashboardDialog() {
             return { control: OcrLanguagesEdit, panel: 2,
                 message: "⚠️ OCR languages: use BCP 47 tags such as ko-KR,en-US`r`n⚠️ OCR 언어는 ko-KR,en-US 같은 BCP 47 태그로 입력하세요." }
         if !IsValidTextTranslateFontSize(FontSizeEdit.Value)
-            return { control: FontSizeEdit, panel: 1,
+            return { control: FontSizeEdit, panel: 2,
                 message: Format("⚠️ Translate font size must be between {1} and {2}.`r`n⚠️ 번역 글꼴 크기는 {1}–{2} 사이여야 합니다.",
                     TEXT_TRANSLATE_FONT_SIZE_MIN, TEXT_TRANSLATE_FONT_SIZE_MAX) }
         return ""
@@ -3783,9 +3994,10 @@ ShowDashboardDialog() {
             ShowTimedTooltip(invalid.message, 4000)
             return
         }
-        problems := SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipboardChk,
-            initialAutoClipboard, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit,
-            saveFolderChosen, OcrEngineCombo, initialOcrEngine, OcrLanguagesEdit, initialOcrLanguages)
+        problems := SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, BorderColorCombo, BorderWidthCombo,
+            initialBorderColor, initialBorderWidth, AutoClipboardChk, initialAutoClipboard, FontSizeEdit,
+            HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit, saveFolderChosen, OcrEngineCombo,
+            initialOcrEngine, OcrLanguagesEdit, initialOcrLanguages)
         if (problems.Length == 0) {
             ShowTimedTooltip("✅ All settings saved.", 1500)
         } else {
@@ -3812,31 +4024,13 @@ ShowDashboardDialog() {
 }
 
 SCW_MinimizeAll() {
-    for hwnd, winInfo in ClipWins {
-        if !winInfo.IsMinimized {
-            WinGetPos(&oX, &oY, , , "ahk_id " hwnd)
-            winInfo.orgX := oX
-            winInfo.orgY := oY
-            WinMove(, , MINI_SIZE, MINI_SIZE, hwnd)
-            WinSetTransparent(MINI_OPACITY, hwnd)
-            winInfo.NumBg.Visible := true
-            winInfo.NumText.Visible := true
-            winInfo.NumText.Redraw()
-            winInfo.IsMinimized := true
-        }
-    }
+    for hwnd, winInfo in ClipWins
+        MinimizeClipWin(hwnd, winInfo)
 }
 
 SCW_RestoreAll() {
-    for hwnd, winInfo in ClipWins {
-        if winInfo.IsMinimized {
-            WinMove(winInfo.orgX, winInfo.orgY, winInfo.w + WINDOW_BORDER_WIDTH * 2, winInfo.h + WINDOW_BORDER_WIDTH * 2, hwnd)
-            WinSetTransparent("Off", hwnd)
-            winInfo.NumText.Visible := false
-            winInfo.NumBg.Visible := false
-            winInfo.IsMinimized := false
-        }
-    }
+    for hwnd, winInfo in ClipWins
+        RestoreClipWin(hwnd, winInfo)
 }
 
 SCW_CloseAll() {
@@ -4148,7 +4342,7 @@ GetManualText(lang) {
             
             • 클립보드 이미지 크기: Original Size 또는 400~1600px
             • 파일 저장 프리셋: PNG(Doc/Pic 100%), JPG 90%(Doc 83%·Pic 70%), JPG 80%(65%·50%), JPG 70%(50%·35%)
-            • 복사/저장 이미지 검정 아웃라인: 켜기/끄기
+            • 플로팅 캡처 창 테두리: General 탭에서 색상(6종) 및 두께(1~5px) 선택
             • 저장 폴더(Ctrl+S): General 탭에서 이미지 저장 위치 선택 (기본: 바탕화면)
             • About 탭: GitHub 최신 버전 확인, 검증된 EXE 다운로드 및 자동 재시작
             • 번역 단축키: Win+CapsLock 등 5가지 옵션
@@ -4214,7 +4408,7 @@ GetManualText(lang) {
             
             • Rozmiar obrazu: oryginalny lub szerokość 400~1600 px
             • Ustawienie zapisu: PNG 100% lub JPG 90/80/70% z szacunkami Doc/Pic
-            • Czarny kontur kopiowanego/zapisanego obrazu: wł./wył.
+            • Obramowanie pływającego okna: wybór koloru (6 opcji) i grubości (1~5 px) na karcie General
             • Karta About: sprawdzanie, pobieranie i instalacja aktualizacji GitHub
             • Skrót do tłumaczenia: 5 opcji
             • Język tłumaczenia: 49 języków europejskich
@@ -4279,7 +4473,7 @@ GetManualText(lang) {
             
             • Bildgröße: Originalgröße oder 400~1600 px Breite
             • Speicherprofil: PNG 100% oder JPG 90/80/70% mit Doc/Pic-Schätzwerten
-            • Schwarze Bildkontur beim Kopieren/Speichern: Ein/Aus
+            • Rahmen des schwebenden Aufnahmefensters: Farbe (6 Optionen) und Breite (1~5 px) unter General
             • About-Tab: GitHub-Updates prüfen, herunterladen und installieren
             • Übersetzungs-Tastenkürzel: 5 Optionen
             • Übersetzungssprache: 49 europäische Sprachen
@@ -4344,7 +4538,7 @@ GetManualText(lang) {
             
             • Taille de l'image : originale ou largeur 400~1600 px
             • Profil : PNG 100 % ou JPG 90/80/70 % avec estimations Doc/Pic
-            • Contour noir à la copie/enregistrement : activé/désactivé
+            • Bordure de la fenêtre flottante : couleur (6 choix) et épaisseur (1~5 px) dans General
             • Onglet About : vérifier, télécharger et installer les mises à jour GitHub
             • Raccourci de traduction : 5 options
             • Langue de traduction : 49 langues européennes
@@ -4409,7 +4603,7 @@ GetManualText(lang) {
             
             • Tamaño de imagen: original o ancho 400~1600 px
             • Perfil: PNG 100% o JPG 90/80/70% con estimaciones Doc/Pic
-            • Contorno negro al copiar/guardar: activado/desactivado
+            • Borde de la ventana flotante: color (6 opciones) y grosor (1~5 px) en General
             • Pestaña About: buscar, descargar e instalar actualizaciones de GitHub
             • Atajo de traducción: 5 opciones
             • Idioma de traducción: 49 idiomas europeos
@@ -4478,7 +4672,7 @@ GetManualText(lang) {
         
         • Clipboard image size: Original Size or 400~1600 px width
         • File-save preset: PNG (Doc/Pic 100%), JPG 90% (Doc 83%·Pic 70%), JPG 80% (65%·50%), JPG 70% (50%·35%)
-        • Black outline for copied/saved images: On/Off
+        • Floating capture window border: choose color (6 presets) and thickness (1~5 px) on General
         • Save folder (Ctrl+S): Choose the image save location on the General tab (default: Desktop)
         • About tab: Check GitHub, download a verified EXE, install, and restart
         • Translation hotkey: 5 options available

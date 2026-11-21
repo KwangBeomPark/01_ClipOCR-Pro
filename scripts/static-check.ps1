@@ -72,7 +72,7 @@ if ($null -ne $appVersionValue -and $null -ne $fileVersionValue) {
     Assert-Project ($fileVersionValue -eq "$appVersionValue.0") "App and file versions differ."
 }
 
-foreach ($include in @("SuiteRegistry.ahk", "OcrService.ahk", "HealthCheck.ahk")) {
+foreach ($include in @("SuiteRegistry.ahk", "OcrService.ahk", "HealthCheck.ahk", "SettingsManager.ahk")) {
     Assert-Project ($main -match "(?m)^#Include $([regex]::Escape($include))$") "Missing module include: $include"
 }
 
@@ -83,7 +83,7 @@ for ($index = 0; $index -lt $menuNumbers.Count; $index++) {
     Assert-Project ($menuNumbers[$index] -eq ($index + 1)) "Capture-menu numbering is out of sequence."
 }
 
-foreach ($readOnlyModule in @("SuiteRegistry.ahk", "OcrService.ahk", "HealthCheck.ahk")) {
+foreach ($readOnlyModule in @("SuiteRegistry.ahk", "OcrService.ahk", "HealthCheck.ahk", "AtomicSettings.ahk", "SettingsManager.ahk")) {
     $moduleText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "src\$readOnlyModule")
     Assert-Project ($moduleText -notmatch '\bRegWrite\b') "$readOnlyModule must not write Registry values."
 }

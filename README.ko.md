@@ -92,7 +92,7 @@
 | 플로팅 창에서 `Ctrl + C` | 플로팅 이미지 복사 |
 | 플로팅 창에서 `Ctrl + 0` | Original Size를 기본값으로 저장하고 현재 이미지를 원본 크기로 즉시 복사 |
 | 플로팅 창에서 `Ctrl + 1`~`Ctrl + 7` | 가로 400~1600px로 설정하고 현재 이미지를 즉시 복사 |
-| 플로팅 창에서 `Ctrl + S` | 현재 가로폭·형식·품질·아웃라인 설정을 적용해 설정한 폴더에 JPG 또는 PNG 저장 (기본: 바탕화면) |
+| 플로팅 창에서 `Ctrl + S` | 현재 가로폭·형식·품질 설정을 적용해 설정한 폴더에 JPG 또는 PNG 저장 (기본: 바탕화면) |
 | 우클릭 메뉴 → `Image Quality & Size` | PNG 또는 JPG 90/80/70 프리셋을 선택하고 다음 실행에도 마지막 선택 유지 |
 | 플로팅 창에서 `Shift + Drag`, `Ctrl + Drag`, `Alt + Drag`, `Ctrl + Z` | 빨간 박스, 노란 형광펜, 초록 형광펜, 실행 취소 |
 | 우클릭 메뉴 → Arrow / Number Pin / Mosaic | 드래그 방향 화살표, 자동 증가 번호 핀, 드래그 영역 모자이크(민감정보 가리기) |
@@ -102,13 +102,13 @@
 
 ## ⚙️ 설정 저장 방식
 
-ClipOCR-Pro 설정값은 Windows 사용자별 Registry에 저장됩니다.
+ClipOCR-Pro 설정값은 설치 폴더의 `UserSetting` 하위 폴더 내 INI 파일에 저장됩니다(기존 `HKCU\Software\ScreenClipTool` 레지스트리 값은 최초 실행 시 자동 마이그레이션됨).
 
 ```text
-HKCU\Software\ScreenClipTool
+%LOCALAPPDATA%\Programs\ClipOCR\UserSetting\config.ini
 ```
 
-현재 저장되는 주요 값은 클립보드 이미지 크기, 새 캡처 자동 복사, 파일 저장 프리셋, 이미지 테두리, 저장 폴더, 번역 옵션, 로컬 OCR 엔진/언어, UI 언어, 번역 최초 1회 동의 여부입니다. OCR 기본값은 `Auto`, `ko-KR,en-US`이며 설치된 Windows OCR 언어 → 포터블 Tesseract → 다른 요청 Windows 언어 순으로 시도합니다. 앱 로컬 설정은 관리형 Suite 기본값보다 항상 우선합니다.
+현재 저장되는 주요 값은 클립보드 이미지 크기, 새 캡처 자동 복사, 파일 저장 프리셋, 플로팅 캡처 창 테두리(색상·두께), 저장 폴더, 번역 옵션, 로컬 OCR 엔진/언어, UI 언어, 번역 최초 1회 동의 여부입니다. OCR 기본값은 `Auto`, `ko-KR,en-US`이며 설치된 Windows OCR 언어 → 포터블 Tesseract → 다른 요청 Windows 언어 순으로 시도합니다. 앱 로컬 설정은 관리형 Suite 기본값보다 항상 우선합니다.
 
 관리자가 선택형 `PL_Suite\ClipOCR` 연동을 활성화하면 캡처 동작과 사용자가 `Ctrl + S`로 명시 저장할 때의 기본 폴더를 중앙값에서 읽을 수 있습니다. 위 앱 전용 경로에 기존 값이 있으면 항상 우선하며, 앱은 Suite 레지스트리에 쓰지 않습니다. 번역 동의는 계속 앱 전용 경로에만 남고 중앙 폴더로 캡처를 자동 저장하지 않습니다.
 

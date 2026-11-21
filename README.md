@@ -92,7 +92,7 @@ Release signing selects the code-signing certificate from the Windows certificat
 | `Ctrl + C` on floating window | Copy the floating image |
 | `Ctrl + 0` on floating window | Save Original Size as the default and immediately copy the current image at its original dimensions |
 | `Ctrl + 1` through `Ctrl + 7` on floating window | Set width from 400 to 1600 px and immediately copy the current image |
-| `Ctrl + S` on floating window | Save a JPG or PNG to the configured folder using the current width, format, quality, and outline settings |
+| `Ctrl + S` on floating window | Save a JPG or PNG to the configured folder using the current width, format, and quality settings |
 | Right-click → `Image Quality & Size` | Choose PNG or a JPG 90/80/70 preset and remember the last selection across restarts |
 | `Shift + Drag`, `Ctrl + Drag`, `Alt + Drag`, `Ctrl + Z` on floating window | Red box, yellow highlight, green highlight, undo |
 | Right-click menu → Arrow / Number Pin / Mosaic | Draw a directional arrow, stamp auto-incrementing numbered pins, or pixelate an area to mask sensitive information |
@@ -102,13 +102,13 @@ Release signing selects the code-signing certificate from the Windows certificat
 
 ## ⚙️ Settings Storage
 
-ClipOCR-Pro stores per-user configuration data in the Windows Registry.
+ClipOCR-Pro stores per-user configuration data in an INI file inside its `UserSetting` subfolder (legacy values under `HKCU\Software\ScreenClipTool` are migrated automatically on first launch).
 
 ```text
-HKCU\Software\ScreenClipTool
+%LOCALAPPDATA%\Programs\ClipOCR\UserSetting\config.ini
 ```
 
-Current settings include clipboard image size, automatic clipboard copy, file-save preset, image outline, save folder, translation options, local OCR engine/languages, UI language, and the one-time translation consent flag. Auto OCR defaults to `ko-KR,en-US`: it tries an installed matching Windows OCR language first, then portable Tesseract, then another requested Windows language. App-local settings always take precedence over managed Suite defaults.
+Current settings include clipboard image size, automatic clipboard copy, file-save preset, floating clip window border (color and thickness), save folder, translation options, local OCR engine/languages, UI language, and the one-time translation consent flag. Auto OCR defaults to `ko-KR,en-US`: it tries an installed matching Windows OCR language first, then portable Tesseract, then another requested Windows language. App-local settings always take precedence over managed Suite defaults.
 
 When an administrator enables the optional `PL_Suite\ClipOCR` integration, ClipOCR-Pro can read managed defaults for capture behavior and the explicit `Ctrl + S` save folder. Existing values under the app-owned path above always win, and the Suite registry is never written by the app. Translation consent remains app-local. Managed folders are never used to save captures automatically.
 
