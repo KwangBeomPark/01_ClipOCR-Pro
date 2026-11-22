@@ -149,20 +149,134 @@ try {
         Assert-Test $true 'Matching explicit origin rejected.'
         Expect-Failure { Assert-SuiteOrigin $repoRoot 'KwangBeomPark/DIFFERENT' } 'Wrong publication origin accepted.'
     } finally { Set-Item Function:\Invoke-Git -Value $invokeGitOriginal }
-    $official = Join-Path $repoRoot 'release'
-    $before = @(Get-ChildItem -LiteralPath $official -File | Sort-Object Name | ForEach-Object { "$($_.Name):$((Get-FileHash -LiteralPath $_.FullName).Hash)" }) -join "`n"
-    foreach ($arguments in @(
-        @('-File', (Join-Path $repoRoot 'scripts\build.ps1'), '-OutputDirectory', 'release'),
-        @('-File', (Join-Path $repoRoot 'scripts\build.ps1'), '-OutputDirectory', 'release\nested'),
-        @('-File', (Join-Path $repoRoot 'scripts\release.ps1'), '-SkipSigning'),
-        @('-File', (Join-Path $repoRoot 'scripts\publish.ps1'), '-AllowUnsigned'),
-        @('-File', (Join-Path $repoRoot 'scripts\publish.ps1'), '-AllowLegacyTimestamp')
-    )) {
-        $result = Invoke-Native powershell.exe (@('-NoProfile', '-ExecutionPolicy', 'Bypass') + $arguments)
-        Assert-Test ($result.ExitCode -ne 0) 'An unsafe entry point was accepted.'
+    function Get-ReparseSignature {
+        param($Item)
+        $linkType = if ($null -ne $Item.PSObject.Properties['LinkType'] -and $null -ne $Item.LinkType) { [string]$Item.LinkType } else { '' }
+        $targetVal = if ($null -ne $Item.PSObject.Properties['LinkTarget'] -and $null -ne $Item.LinkTarget) {
+            [string]$Item.LinkTarget
+        } elseif ($null -ne $Item.PSObject.Properties['Target'] -and $null -ne $Item.Target) {
+            (@($Item.Target) -join '|')
+        } else { '' }
+        if ([string]::IsNullOrWhiteSpace($targetVal)) {
+            throw "Could not resolve reparse point target for snapshot: $($Item.FullName)"
+        }
+        return "$linkType|$($Item.Attributes)|$targetVal"
     }
-    $after = @(Get-ChildItem -LiteralPath $official -File | Sort-Object Name | ForEach-Object { "$($_.Name):$((Get-FileHash -LiteralPath $_.FullName).Hash)" }) -join "`n"
-    Assert-Test ($before -ceq $after) 'Safety guard checks changed existing official assets.'
+    function Get-OfficialReleaseSnapshot {
+        param([string]$Directory)
+        try {
+            $rootItem = Get-Item -LiteralPath $Directory -Force -ErrorAction Stop
+        } catch [System.Management.Automation.ItemNotFoundException] {
+            return 'ABSENT'
+        }
+        if ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            return "LINK:$(Get-ReparseSignature $rootItem)"
+        }
+        if (-not $rootItem.PSIsContainer) {
+            return "FILE:$((Get-FileHash -LiteralPath $rootItem.FullName -Algorithm SHA256).Hash)"
+        }
+        $prefix = $rootItem.FullName.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+        $entries = [Collections.Generic.List[string]]::new()
+        $queue = [Collections.Generic.Queue[string]]::new()
+        $queue.Enqueue($rootItem.FullName)
+        while ($queue.Count -gt 0) {
+            $current = $queue.Dequeue()
+            foreach ($child in @(Get-ChildItem -LiteralPath $current -Force)) {
+                $rel = $child.FullName.Substring($prefix.Length)
+                if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                    $entries.Add("L:$($rel):$(Get-ReparseSignature $child)")
+                } elseif ($child.PSIsContainer) {
+                    $entries.Add("D:$rel")
+                    $queue.Enqueue($child.FullName)
+                } else {
+                    $entries.Add("F:$($rel):$((Get-FileHash -LiteralPath $child.FullName -Algorithm SHA256).Hash)")
+                }
+            }
+        }
+        if ($entries.Count -eq 0) { return 'EMPTY' }
+        $sorted = [string[]]$entries.ToArray()
+        [Array]::Sort($sorted, [StringComparer]::Ordinal)
+        return ("EXISTS`n" + ($sorted -join "`n"))
+    }
+    Assert-Test ((Get-OfficialReleaseSnapshot (Join-Path $fixture 'absent-release')) -ceq 'ABSENT') 'Absent release directory snapshot failed.'
+    $emptyRelease = Join-Path $fixture 'empty-release'
+    New-Item -ItemType Directory -Path $emptyRelease | Out-Null
+    Assert-Test ((Get-OfficialReleaseSnapshot $emptyRelease) -ceq 'EMPTY') 'Empty release directory snapshot failed.'
+    $releaseSnap = Get-OfficialReleaseSnapshot $release
+    $expectedSetupEntry = "F:$($names[0]):$((Get-FileHash -LiteralPath (Join-Path $release $names[0]) -Algorithm SHA256).Hash)"
+    Assert-Test ($releaseSnap.StartsWith("EXISTS`n") -and (($releaseSnap -split "`n") -ccontains $expectedSetupEntry)) 'Populated release directory snapshot missed installer hash.'
+    Expect-Failure { Get-ReparseSignature ([pscustomobject]@{ FullName = 'fixture-link'; Attributes = [IO.FileAttributes]::ReparsePoint }) } 'Unresolvable reparse point target was accepted.'
+    $linkTargetA = Join-Path $fixture 'link-target-a'
+    $linkTargetB = Join-Path $fixture 'link-target-b'
+    New-Item -ItemType Directory -Path $linkTargetA, $linkTargetB | Out-Null
+    [IO.File]::WriteAllText((Join-Path $linkTargetA 'secret.txt'), 'outside-target')
+    $rootLink = Join-Path $fixture 'release-link'
+    $nestedLink = Join-Path $emptyRelease 'nested-link'
+    try {
+        New-Item -ItemType Junction -Path $rootLink -Target $linkTargetA | Out-Null
+        $linkSnapA = Get-OfficialReleaseSnapshot $rootLink
+        [IO.Directory]::Delete($rootLink)
+        New-Item -ItemType Junction -Path $rootLink -Target $linkTargetB | Out-Null
+        $linkSnapB = Get-OfficialReleaseSnapshot $rootLink
+        [IO.Directory]::Delete($rootLink)
+        Assert-Test ($linkSnapA.StartsWith('LINK:') -and $linkSnapB.StartsWith('LINK:') -and ($linkSnapA -cne $linkSnapB)) 'Root reparse point target change was not detected.'
+
+        New-Item -ItemType Junction -Path $nestedLink -Target $linkTargetA | Out-Null
+        $nestedSnapA = Get-OfficialReleaseSnapshot $emptyRelease
+        [IO.Directory]::Delete($nestedLink)
+        New-Item -ItemType Junction -Path $nestedLink -Target $linkTargetB | Out-Null
+        $nestedSnapB = Get-OfficialReleaseSnapshot $emptyRelease
+        [IO.Directory]::Delete($nestedLink)
+        Assert-Test (
+            $nestedSnapA.StartsWith("EXISTS`n") -and
+            $nestedSnapB.StartsWith("EXISTS`n") -and
+            ($nestedSnapA -match '(?m)^L:nested-link:') -and
+            ($nestedSnapB -match '(?m)^L:nested-link:') -and
+            ($nestedSnapA -cne $nestedSnapB) -and
+            ($nestedSnapA -notmatch 'secret\.txt') -and
+            ($nestedSnapB -notmatch 'secret\.txt')
+        ) 'Child reparse point retargeting or non-descent failed.'
+    } finally {
+        foreach ($junctionPath in @($rootLink, $nestedLink)) {
+            if ($null -ne (Get-Item -LiteralPath $junctionPath -Force -ErrorAction SilentlyContinue)) {
+                [IO.Directory]::Delete($junctionPath)
+            }
+        }
+    }
+    $guardRepo = Join-Path $fixture 'guard-repo'
+    $guardScripts = Join-Path $guardRepo 'scripts'
+    $guardOfficial = Join-Path $guardRepo 'release'
+    New-Item -ItemType Directory -Path $guardScripts, $guardOfficial | Out-Null
+    foreach ($scriptFile in @('Common.ps1', 'ReleaseSafety.ps1', 'build.ps1', 'release.ps1', 'publish.ps1')) {
+        Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\$scriptFile") -Destination (Join-Path $guardScripts $scriptFile)
+    }
+    [IO.File]::WriteAllText((Join-Path $guardOfficial $names[0]), 'official-sentinel-installer')
+    [IO.File]::WriteAllText((Join-Path $guardOfficial 'build-manifest.json'), '{"sentinel":true}')
+    [IO.File]::WriteAllText((Join-Path $guardOfficial 'SHA256SUMS.txt'), 'sentinel-checksum')
+    $guardBefore = Get-OfficialReleaseSnapshot $guardOfficial
+    $repoOfficial = Join-Path $repoRoot 'release'
+    $repoBefore = Get-OfficialReleaseSnapshot $repoOfficial
+    $guardFailures = [Collections.Generic.List[string]]::new()
+    foreach ($guardCase in @(
+        @{ Args = @('-File', (Join-Path $guardScripts 'build.ps1'), '-OutputDirectory', 'release'); Expected = 'Local build output must be inside build, dist or out' },
+        @{ Args = @('-File', (Join-Path $guardScripts 'build.ps1'), '-OutputDirectory', 'release\nested'); Expected = 'Local build output must be inside build, dist or out' },
+        @{ Args = @('-File', (Join-Path $guardScripts 'release.ps1'), '-SkipSigning'); Expected = 'official release cannot be unsigned' },
+        @{ Args = @('-File', (Join-Path $guardScripts 'publish.ps1'), '-AllowUnsigned'); Expected = 'official publication cannot bypass verification' },
+        @{ Args = @('-File', (Join-Path $guardScripts 'publish.ps1'), '-AllowLegacyTimestamp'); Expected = 'official publication cannot bypass verification' }
+    )) {
+        $result = Invoke-Native powershell.exe (@('-NoProfile', '-ExecutionPolicy', 'Bypass') + $guardCase.Args) -MergeStdErr
+        $normalizedOutput = ($result.Text -replace '\s+', ' ')
+        if ($result.ExitCode -eq 0 -or -not ($normalizedOutput -match [regex]::Escape($guardCase.Expected))) {
+            $guardFailures.Add("Unsafe entry point was not rejected by its safety guard: $($guardCase.Args -join ' ')")
+        } else {
+            $script:count++
+        }
+    }
+    $guardAfter = Get-OfficialReleaseSnapshot $guardOfficial
+    $repoAfter = Get-OfficialReleaseSnapshot $repoOfficial
+    Assert-Test ($guardBefore -ceq $guardAfter) 'Safety guard checks changed isolated official release assets.'
+    Assert-Test ($repoBefore -ceq $repoAfter) 'Safety guard checks changed repository official release assets.'
+    Assert-Test ($guardFailures.Count -eq 0) ($guardFailures -join '; ')
     Write-Host "Release safety: $count assertions passed (mock signatures; no signing or publication)."
 } finally {
     if (Test-Path Function:\Move-SuiteDirectory) { Remove-Item Function:\Move-SuiteDirectory }

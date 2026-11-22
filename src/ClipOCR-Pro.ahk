@@ -2331,37 +2331,127 @@ CopyBitmapToPaint(pBitmap) {
     }
 }
 
-CreateOcrInputBitmap(pBitmap, maxDimension := 2200) {
+DetectOcrUniformEdgeColor(pBitmap, &outArgb) {
+    outArgb := 0
     if !pBitmap
+        return false
+    w := Gdip_GetImageWidth(pBitmap)
+    h := Gdip_GetImageHeight(pBitmap)
+    if (w < 2 || h < 2)
+        return false
+    x1 := (w - 1) // 3
+    x2 := (2 * (w - 1)) // 3
+    y1 := (h - 1) // 3
+    y2 := (2 * (h - 1)) // 3
+    points := [
+        [0, 0], [x1, 0], [x2, 0], [w - 1, 0],
+        [0, h - 1], [x1, h - 1], [x2, h - 1], [w - 1, h - 1],
+        [0, y1], [0, y2], [w - 1, y1], [w - 1, y2]
+    ]
+    samples := []
+    for _, pt in points {
+        px := Gdip_GetPixel(pBitmap, pt[1], pt[2])
+        a := (px >> 24) & 0xFF
+        if (a < 200)
+            return false
+        samples.Push({ r: (px >> 16) & 0xFF, g: (px >> 8) & 0xFF, b: px & 0xFF })
+    }
+    bestCount := 0
+    bestR := 0, bestG := 0, bestB := 0
+    for _, base in samples {
+        cnt := 0, sumR := 0, sumG := 0, sumB := 0
+        for _, other in samples {
+            if (Abs(other.r - base.r) <= 16 && Abs(other.g - base.g) <= 16 && Abs(other.b - base.b) <= 16) {
+                cnt++
+                sumR += other.r
+                sumG += other.g
+                sumB += other.b
+            }
+        }
+        if (cnt > bestCount) {
+            bestCount := cnt
+            bestR := Round(sumR / cnt)
+            bestG := Round(sumG / cnt)
+            bestB := Round(sumB / cnt)
+        }
+    }
+    if (bestCount < 9)
+        return false
+    outArgb := 0xFF000000 | (bestR << 16) | (bestG << 8) | bestB
+    return true
+}
+
+CreateOcrInputBitmap(pBitmap, maxDimension := 2600) {
+    static MAX_UPSCALE_SOURCE_PIXELS := 750000
+    static QUIET_ZONE_PADDING := 20
+    if (!pBitmap || !IsNumber(maxDimension))
+        return 0
+    maxDimension := Integer(Floor(maxDimension))
+    if (maxDimension < 1)
         return 0
     sourceW := Gdip_GetImageWidth(pBitmap)
     sourceH := Gdip_GetImageHeight(pBitmap)
     if (sourceW < 1 || sourceH < 1)
         return 0
-    if (sourceW <= maxDimension && sourceH <= maxDimension)
-        return Gdip_CloneBitmapArea(pBitmap, 0, 0, sourceW, sourceH)
 
-    scale := Min(maxDimension / sourceW, maxDimension / sourceH)
-    outputW := Max(1, Round(sourceW * scale))
-    outputH := Max(1, Round(sourceH * scale))
-    output := Gdip_CreateBitmap(outputW, outputH)
-    if !output
-        return 0
-    graphics := Gdip_GraphicsFromImage(output)
-    if !graphics {
-        Gdip_DisposeImage(output)
-        return 0
+    padColor := 0
+    pad := 0
+    if (sourceW > maxDimension || sourceH > maxDimension) {
+        scale := Min(maxDimension / sourceW, maxDimension / sourceH)
+        scaledW := Max(1, Min(maxDimension, Round(sourceW * scale)))
+        scaledH := Max(1, Min(maxDimension, Round(sourceH * scale)))
+    } else {
+        desiredPad := DetectOcrUniformEdgeColor(pBitmap, &padColor) ? QUIET_ZONE_PADDING : 0
+        if (sourceW * sourceH <= MAX_UPSCALE_SOURCE_PIXELS && sourceW * 2 <= maxDimension && sourceH * 2 <= maxDimension) {
+            scaledW := sourceW * 2
+            scaledH := sourceH * 2
+        } else {
+            scaledW := sourceW
+            scaledH := sourceH
+        }
+        pad := Max(0, Min(desiredPad, (maxDimension - Max(scaledW, scaledH)) // 2))
+        if (scaledW == sourceW && scaledH == sourceH && pad == 0)
+            return Gdip_CloneBitmapArea(pBitmap, 0, 0, sourceW, sourceH)
     }
+
+    outputW := scaledW + pad * 2
+    outputH := scaledH + pad * 2
+    output := 0
+    graphics := 0
+    imgAttr := 0
+    succeeded := false
     try {
-        Gdip_SetInterpolationMode(graphics, 7)
-        if (Gdip_DrawImage(graphics, pBitmap, 0, 0, outputW, outputH, 0, 0, sourceW, sourceH) != 0)
-            throw Error("Could not resize OCR input")
+        output := Gdip_CreateBitmap(outputW, outputH)
+        if !output
+            return 0
+        graphics := Gdip_GraphicsFromImage(output)
+        if !graphics
+            return 0
+        if (pad > 0)
+            Gdip_GraphicsClear(graphics, padColor)
+        Gdip_SetCompositingMode(graphics, 1) ; CompositingModeSourceCopy
+        Gdip_SetInterpolationMode(graphics, 7) ; HighQualityBicubic
+        DllCall("gdiplus\GdipSetPixelOffsetMode", "UPtr", graphics, "Int", 4) ; PixelOffsetModeHalf
+        if (DllCall("gdiplus\GdipCreateImageAttributes", "UPtr*", &imgAttr) == 0 && imgAttr)
+            DllCall("gdiplus\GdipSetImageAttributesWrapMode", "UPtr", imgAttr, "Int", 3, "UInt", 0, "Int", 0) ; WrapModeTileFlipXY
+        drawStatus := DllCall("gdiplus\GdipDrawImageRectRect"
+            , "UPtr", graphics, "UPtr", pBitmap
+            , "Float", pad, "Float", pad, "Float", scaledW, "Float", scaledH
+            , "Float", 0, "Float", 0, "Float", sourceW, "Float", sourceH
+            , "Int", 2, "UPtr", imgAttr, "UPtr", 0, "UPtr", 0)
+        if (drawStatus != 0)
+            throw Error("Could not prepare OCR input bitmap")
+        succeeded := true
         return output
     } catch {
-        Gdip_DisposeImage(output)
         return 0
     } finally {
-        Gdip_DeleteGraphics(graphics)
+        if imgAttr
+            try Gdip_DisposeImageAttributes(imgAttr)
+        if graphics
+            try Gdip_DeleteGraphics(graphics)
+        if (!succeeded && output)
+            try Gdip_DisposeImage(output)
     }
 }
 
@@ -2393,80 +2483,249 @@ ExtractTextFromRightClickedClip(*) {
     }
 }
 
-GetOcrTranslateTargetText(editCtrl) {
-    selected := ""
-    try selected := Trim(EditGetSelectedText(editCtrl), "`r`n `t")
-    if (selected != "")
-        return selected
-    return Trim(editCtrl.Value, "`r`n `t")
+TrimUnicodeWhitespace(text) {
+    return RegExReplace(String(text), "(*UCP)^\s+|\s+$", "")
 }
 
-ShowOcrResultPopup(text, engine, language, warning := "") {
+ShowOcrResultPopup(text, engine, language, warning := "", translateFn := 0) {
     global OcrResultPopupHwnd, APP_NAME
     if (OcrResultPopupHwnd && WinExist("ahk_id " OcrResultPopupHwnd))
         try WinClose("ahk_id " OcrResultPopupHwnd)
 
-    resultGui := Gui("+AlwaysOnTop +Resize +MinSize520x320", APP_NAME " — Local OCR")
+    resultGui := Gui("+AlwaysOnTop +OwnDialogs +Resize +MinSize520x320", APP_NAME " — Local OCR")
     resultGui.SetFont("s9", "Segoe UI")
-    resultGui.Add("Text", "xm ym w620 h24", "🔤 Local text extraction")
-    details := engine (language != "" ? " · " language : "")
+    titleText := resultGui.Add("Text", "x15 y12 w360 h24", "🔤 Local text extraction")
+    langLabel := resultGui.Add("Text", "x440 y14 w24 h22 Right", "🌐")
+    langCombo := resultGui.Add("DropDownList", "x470 y10 w165 Choose1", GetTextTranslationPopupLangItems())
+    baseDetails := engine (language != "" ? " · " language : "")
     if (warning != "")
-        details .= " · " warning
-    resultGui.Add("Text", "xm y+4 w620 h32 c666666", details)
-    resultEdit := resultGui.Add("Edit", "xm y+6 w620 h300 ReadOnly Multi WantTab", text)
-    copyBtn := resultGui.Add("Button", "xm y+10 w110 h30 Default", "Copy Text")
-    translateBtn := resultGui.Add("Button", "x+10 yp w120 h30", "🌐 Translate")
-    closeBtn := resultGui.Add("Button", "x+10 yp w90 h30", "Close")
+        baseDetails .= " · " warning
+    detailsText := resultGui.Add("Text", "x15 y40 w620 h28 c666666", baseDetails)
+    resultEdit := resultGui.Add("Edit", "x15 y74 w620 h304 ReadOnly Multi WantTab", text)
+    copyBtn := resultGui.Add("Button", "x15 y388 w110 h30 Default", "Copy Text")
+    closeBtn := resultGui.Add("Button", "x135 y388 w90 h30", "Close")
 
-    CopyResult(*) {
-        A_Clipboard := resultEdit.Value
-        ToolTip("✅ OCR text copied.")
-        SetTimer(() => ToolTip(), -1500)
+    sourceText := text
+    activeSourceText := sourceText
+    activeIsSelection := false
+    currentText := { Value: sourceText }
+    lastLangIndex := 1 ; 1 = ORIGINAL
+    translationCache := Map()
+    pendingRequest := 0
+    isBusy := false
+    isAlive := true
+    popupHwnd := 0
+
+    IsPopupAlive() {
+        return isAlive && popupHwnd && WinExist("ahk_id " popupHwnd)
     }
-    TranslateResult(*) {
-        global TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_MAX_CHARS
-        ocrText := GetOcrTranslateTargetText(resultEdit)
-        if (ocrText == "") {
+
+    UpdateDetailsLabel(isSelection := false) {
+        try detailsText.Value := isSelection ? (baseDetails " · Selected text") : baseDetails
+    }
+
+    ScheduleOcrLangChange(*) {
+        global TEXT_TRANSLATE_MAX_CHARS
+        if (isBusy || !IsPopupAlive())
+            return
+
+        selectedIndex := langCombo.Value
+        selectedLabel := langCombo.Text
+        if (selectedLabel == "" || selectedIndex == lastLangIndex)
+            return
+
+        if (selectedLabel == "ORIGINAL") {
+            lastLangIndex := 1
+            activeSourceText := sourceText
+            activeIsSelection := false
+            currentText.Value := sourceText
+            resultEdit.Value := sourceText
+            UpdateDetailsLabel(false)
+            return
+        }
+
+        ; Snapshot selection synchronously at commit time so clicking elsewhere cannot expand scope to full text.
+        if (lastLangIndex == 1) {
+            selStart := Buffer(4, 0), selEnd := Buffer(4, 0)
+            readOk := true
+            hasSelectionRange := false
+            rawSelected := ""
+            try {
+                SendMessage(0x00B0, selStart.Ptr, selEnd.Ptr, resultEdit.Hwnd)
+                hasSelectionRange := (NumGet(selStart, 0, "UInt") != NumGet(selEnd, 0, "UInt"))
+                if hasSelectionRange
+                    rawSelected := EditGetSelectedText(resultEdit)
+            } catch {
+                readOk := false
+            }
+            if !readOk {
+                try langCombo.Choose(lastLangIndex)
+                ShowTimedTooltip("⚠️ 선택한 텍스트를 읽지 못했습니다.`r`n⚠️ Could not read the selected text.", 2500)
+                return
+            }
+            if hasSelectionRange {
+                selectedPart := TrimUnicodeWhitespace(rawSelected)
+                if (selectedPart == "") {
+                    try langCombo.Choose(lastLangIndex)
+                    ShowTimedTooltip("⚠️ 공백이 아닌 텍스트를 선택해 주세요.`r`n⚠️ Select non-whitespace text to translate.", 2500)
+                    return
+                }
+                targetSource := selectedPart
+                isSelection := true
+            } else {
+                targetSource := TrimUnicodeWhitespace(sourceText)
+                isSelection := false
+            }
+        } else {
+            targetSource := TrimUnicodeWhitespace(activeSourceText)
+            isSelection := activeIsSelection
+        }
+
+        if (targetSource == "") {
+            try langCombo.Choose(lastLangIndex)
             ShowTimedTooltip("⚠️ 번역할 텍스트가 없습니다.`r`n⚠️ No text to translate.", 2500)
             return
         }
-        if (StrLen(ocrText) > TEXT_TRANSLATE_MAX_CHARS) {
-            ShowTimedTooltip("⚠️ 텍스트가 " TEXT_TRANSLATE_MAX_CHARS "자를 초과합니다. 일부만 드래그해 선택한 뒤 다시 눌러 주세요.`r`n⚠️ Text exceeds " TEXT_TRANSLATE_MAX_CHARS " chars. Select a shorter part and try again.", 3500)
+
+        cacheKey := selectedLabel Chr(0x1F) targetSource
+        if translationCache.Has(cacheKey) {
+            lastLangIndex := selectedIndex
+            activeSourceText := targetSource
+            activeIsSelection := isSelection
+            currentText.Value := translationCache[cacheKey]
+            resultEdit.Value := translationCache[cacheKey]
+            UpdateDetailsLabel(isSelection)
             return
         }
-        if !EnsureTranslationConsent()
+
+        if (StrLen(targetSource) > TEXT_TRANSLATE_MAX_CHARS) {
+            try langCombo.Choose(lastLangIndex)
+            ShowTimedTooltip("⚠️ 텍스트가 " TEXT_TRANSLATE_MAX_CHARS "자를 초과합니다. 일부만 드래그해 선택한 뒤 언어를 다시 선택해 주세요.`r`n⚠️ Text exceeds " TEXT_TRANSLATE_MAX_CHARS " chars. Select a shorter part and choose a language again.", 3500)
             return
+        }
+
+        pendingRequest := { index: selectedIndex, label: selectedLabel, source: targetSource,
+            isSelection: isSelection, cacheKey: cacheKey }
+        isBusy := true
+        try langCombo.Enabled := false
+        try copyBtn.Enabled := false
+        SetTimer(ExecutePendingOcrTranslation, -1)
+    }
+
+    ExecutePendingOcrTranslation() {
+        req := pendingRequest
+        pendingRequest := 0
         try {
-            ToolTip(UIText("translating"))
-            translatedText := TranslateTextViaGoogle(ocrText, TEXT_TRANSLATE_LANG)
-            ToolTip()
-            ShowTextTranslationPopup(ocrText, translatedText)
+            if (!IsObject(req) || !IsPopupAlive())
+                return
+
+            try resultGui.Opt("+OwnDialogs")
+            if !EnsureTranslationConsent() {
+                if IsPopupAlive()
+                    try langCombo.Choose(lastLangIndex)
+                return
+            }
+            if !IsPopupAlive()
+                return
+
+            targetLang := GetTextTranslateLangCodeByLabel(req.label)
+            resultEdit.Value := UIText("translating")
+            translatedText := IsObject(translateFn)
+                ? translateFn(req.source, targetLang)
+                : TranslateTextViaGoogle(req.source, targetLang)
+            if !IsPopupAlive()
+                return
+
+            translationCache[req.cacheKey] := translatedText
+            lastLangIndex := req.index
+            activeSourceText := req.source
+            activeIsSelection := req.isSelection
+            currentText.Value := translatedText
+            resultEdit.Value := translatedText
+            UpdateDetailsLabel(req.isSelection)
         } catch as e {
-            ShowTimedTooltip(UIText("translate_failed", Map("error", ShortErrorMessage(e.Message))), 3500)
+            if IsPopupAlive() {
+                try langCombo.Choose(lastLangIndex)
+                try resultEdit.Value := currentText.Value
+                ShowTimedTooltip(UIText("translate_failed", Map("error", ShortErrorMessage(e.Message))), 3500)
+            }
+        } finally {
+            pendingRequest := 0
+            isBusy := false
+            if IsPopupAlive() {
+                try langCombo.Enabled := true
+                try copyBtn.Enabled := true
+            }
         }
+    }
+
+    CancelOcrLangChange(*) {
+        SetTimer(ExecutePendingOcrTranslation, 0)
+        pendingRequest := 0
+        if (!isBusy && IsPopupAlive())
+            try langCombo.Choose(lastLangIndex)
+    }
+    OnOcrWmCommand(wParam, lParam, msg, hwnd) {
+        if (!IsPopupAlive() || hwnd != popupHwnd || lParam != langCombo.Hwnd)
+            return
+        notifyCode := (wParam >> 16) & 0xFFFF
+        if (notifyCode == 9)        ; CBN_SELENDOK: synchronous snapshot before any later click
+            ScheduleOcrLangChange()
+        else if (notifyCode == 10)  ; CBN_SELENDCANCEL
+            CancelOcrLangChange()
+    }
+    CopyResult(*) {
+        if (isBusy || !IsPopupAlive())
+            return
+        A_Clipboard := currentText.Value
+        ToolTip(lastLangIndex == 1 ? "✅ OCR text copied." : "✅ 번역 결과 복사 완료`r`n✅ Translation copied.")
+        SetTimer(() => ToolTip(), -1500)
     }
     DestroyResult(*) {
         global OcrResultPopupHwnd
-        OcrResultPopupHwnd := 0
-        resultGui.Destroy()
+        SetTimer(ExecutePendingOcrTranslation, 0)
+        pendingRequest := 0
+        isAlive := false
+        if (OcrResultPopupHwnd == popupHwnd)
+            OcrResultPopupHwnd := 0
+        try OnMessage(0x0111, OnOcrWmCommand, 0)
+        try resultGui.Destroy()
     }
     ResizeResult(guiObj, minMax, width, height) {
-        if (minMax == -1)
+        if (minMax == -1 || !isAlive)
             return
-        resultEdit.Move(, , Max(300, width - 30), Max(150, height - 115))
-        copyBtn.Move(, height - 42)
-        translateBtn.Move(, height - 42)
-        closeBtn.Move(, height - 42)
+        m := 15
+        comboW := 165
+        labelW := 24
+        gap := 6
+        comboX := width - m - comboW
+        labelX := comboX - gap - labelW
+        titleW := Max(120, labelX - m - 8)
+        btnH := 30
+        btnY := height - 12 - btnH
+        editTop := 74
+        editH := Max(100, btnY - 10 - editTop)
+
+        titleText.Move(m, 12, titleW, 24)
+        langLabel.Move(labelX, 14, labelW, 22)
+        langCombo.Move(comboX, 10, comboW)
+        detailsText.Move(m, 40, Max(280, width - m * 2), 28)
+        resultEdit.Move(m, editTop, Max(280, width - m * 2), editH)
+        copyBtn.Move(m, btnY, 110, btnH)
+        closeBtn.Move(m + 120, btnY, 90, btnH)
     }
 
     copyBtn.OnEvent("Click", CopyResult)
-    translateBtn.OnEvent("Click", TranslateResult)
     closeBtn.OnEvent("Click", DestroyResult)
     resultGui.OnEvent("Close", DestroyResult)
     resultGui.OnEvent("Escape", DestroyResult)
     resultGui.OnEvent("Size", ResizeResult)
     resultGui.Show("w650 h430")
-    OcrResultPopupHwnd := resultGui.Hwnd
+    popupHwnd := resultGui.Hwnd
+    OcrResultPopupHwnd := popupHwnd
+    OnMessage(0x0111, OnOcrWmCommand)
+    resultGui.GetClientPos(, , &initW, &initH)
+    ResizeResult(resultGui, 0, initW, initH)
 }
 
 SCW_Undo(targetHwnd := 0) {

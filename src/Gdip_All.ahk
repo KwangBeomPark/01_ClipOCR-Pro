@@ -2585,19 +2585,25 @@ Gdip_SetCompositingMode(pGraphics, CompositingMode:=0)
 
 Gdip_Startup()
 {
-	if (!DllCall("LoadLibrary", "str", "gdiplus", "UPtr")) {
+	hModule := DllCall("LoadLibrary", "str", "gdiplus", "UPtr")
+	if (!hModule) {
 		throw Error("Could not load GDI+ library")
 	}
 
-	si := Buffer(A_PtrSize = 4 ? 20:32, 0) ; sizeof(GdiplusStartupInputEx) = 20, 32
-	NumPut("uint", 0x2, si)
-	NumPut("uint", 0x4, si, A_PtrSize = 4 ? 16:24)
-	DllCall("gdiplus\GdiplusStartup", "UPtr*", &pToken:=0, "Ptr", si, "UPtr", 0)
-	if (!pToken) {
-		throw Error("Gdiplus failed to start. Please ensure you have gdiplus on your system")
+	pToken := 0
+	try {
+		si := Buffer(A_PtrSize = 4 ? 20:32, 0) ; sizeof(GdiplusStartupInputEx) = 20, 32
+		NumPut("uint", 0x2, si)
+		NumPut("uint", 0x4, si, A_PtrSize = 4 ? 16:24)
+		DllCall("gdiplus\GdiplusStartup", "UPtr*", &pToken, "Ptr", si, "UPtr", 0)
+		if (!pToken) {
+			throw Error("Gdiplus failed to start. Please ensure you have gdiplus on your system")
+		}
+		return pToken
+	} catch as e {
+		DllCall("FreeLibrary", "UPtr", hModule)
+		throw e
 	}
-
-	return pToken
 }
 
 Gdip_Shutdown(pToken)

@@ -53,6 +53,10 @@ RunHealthCheckSuite(errors) {
         && !IsValidTextTranslateFontSize(19) && !IsValidTextTranslateFontSize("x")
         && NormalizeTextTranslateFontSize("x") == 10 && NormalizeTextTranslateFontSize(12) == 12,
         "translation font size bounds")
+    Check(() => (items := GetTextTranslationPopupLangItems()) && items.Length > 1 && items[1] == "ORIGINAL",
+        "translation popup language list starts with ORIGINAL")
+    Check(() => TrimUnicodeWhitespace(Chr(0x00A0) Chr(0x3000) "  ") == ""
+        && TrimUnicodeWhitespace(Chr(0x00A0) "ok" Chr(0x3000)) == "ok", "unicode whitespace trimming")
     Check(() => NormalizeOcrEngine("WINDOWS") == "windows" && NormalizeOcrEngine("unknown") == "auto",
         "OCR engine normalization")
     Check(() => NormalizeOcrLanguages("ko_kr;EN-us;ko-KR") == "ko-KR,en-US"
@@ -167,6 +171,8 @@ RunHealthCheckSuite(errors) {
     }
     Check(() => CheckSettingsSetterFailure(), "settings setters keep runtime state after failed save")
     Check(() => CheckClipWinBorderGeometry(), "floating clip border geometry across resize and restore")
+    Check(() => CheckOcrPopupLayout(), "OCR popup starts on ORIGINAL with non-overlapping layout")
+    Check(() => CheckOcrInputPreprocessing(), "OCR input preprocessing scales small captures and pads uniform borders")
 }
 
 CheckSettingsSetterFailure() {
@@ -310,6 +316,294 @@ CheckClipWinBorderGeometry() {
             try Gdip_Shutdown(token)
         WINDOW_BORDER_WIDTH := oldBorderW
         WINDOW_BORDER_COLOR := oldBorderColor
+    }
+}
+
+CheckOcrPopupLayout() {
+    global OcrResultPopupHwnd, TRANSLATE_CONSENT, TEXT_TRANSLATE_MAX_CHARS, MANUAL_LANG
+    if !IsSet(OcrResultPopupHwnd)
+        OcrResultPopupHwnd := 0
+    oldHwnd := OcrResultPopupHwnd
+    oldConsent := IsSet(TRANSLATE_CONSENT) ? TRANSLATE_CONSENT : false
+    oldMaxChars := IsSet(TEXT_TRANSLATE_MAX_CHARS) ? TEXT_TRANSLATE_MAX_CHARS : 5000
+    oldManualLang := IsSet(MANUAL_LANG) ? MANUAL_LANG : "en"
+    TRANSLATE_CONSENT := true
+    TEXT_TRANSLATE_MAX_CHARS := 5000
+    MANUAL_LANG := "en"
+    try {
+        try DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+        translateCalls := 0
+        lastTranslatedSource := ""
+        MockTranslate(src, lang) {
+            translateCalls++
+            lastTranslatedSource := src
+            return "mock:" lang ":" src
+        }
+        ShowOcrResultPopup("Hello OCR test", "Windows OCR", "en-US", "", MockTranslate)
+        if (!OcrResultPopupHwnd || !WinExist("ahk_id " OcrResultPopupHwnd))
+            return false
+
+        g := GuiFromHwnd(OcrResultPopupHwnd)
+        if !IsObject(g)
+            return false
+
+        textCtrls := []
+        langCtrl := 0
+        editCtrl := 0
+        btnCtrls := []
+        for ctrl in g {
+            if (ctrl.Type == "Text")
+                textCtrls.Push(ctrl)
+            else if (ctrl.Type == "DDL")
+                langCtrl := ctrl
+            else if (ctrl.Type == "Edit")
+                editCtrl := ctrl
+            else if (ctrl.Type == "Button")
+                btnCtrls.Push(ctrl)
+        }
+        if (textCtrls.Length < 3 || !IsObject(langCtrl) || !IsObject(editCtrl) || btnCtrls.Length < 2)
+            return false
+        if (langCtrl.Text != "ORIGINAL" || editCtrl.Value != "Hello OCR test")
+            return false
+
+        titleCtrl := textCtrls[1]
+        labelCtrl := textCtrls[2]
+        detailsCtrl := textCtrls[3]
+        copyCtrl := btnCtrls[1]
+        closeCtrl := btnCtrls[2]
+
+        InBounds(ctrl, cw, ch) {
+            ctrl.GetPos(&x, &y, &w, &h)
+            return (x >= 0 && y >= 0 && x + w <= cw && y + h <= ch)
+        }
+
+        CheckBoundsAndOverlap() {
+            g.GetClientPos(, , &cw, &ch)
+            for _, c in [titleCtrl, labelCtrl, langCtrl, detailsCtrl, editCtrl, copyCtrl, closeCtrl] {
+                if !InBounds(c, cw, ch)
+                    return false
+            }
+            titleCtrl.GetPos(&tx, &ty, &tw, &th)
+            labelCtrl.GetPos(&lx, &ly, &lw, &lh)
+            langCtrl.GetPos(&cx, &cy, &cw2, &ch2)
+            detailsCtrl.GetPos(&dx, &dy, &dw, &dh)
+            editCtrl.GetPos(&ex, &ey, &ew, &eh)
+            copyCtrl.GetPos(&bx, &by, &bw, &bh)
+            closeCtrl.GetPos(&clx, &cly, &clw, &clh)
+            return (tx + tw < lx) && (lx + lw < cx) && (dy + dh < ey) && (ey + eh < by) && (bx + bw < clx)
+        }
+
+        g.GetClientPos(, , &initW, &initH)
+        if !CheckBoundsAndOverlap()
+            return false
+
+        g.Show("w520 h320")
+        Sleep(30)
+        g.GetClientPos(, , &minW, &minH)
+        if (minW != 520 || minH != 320 || !CheckBoundsAndOverlap())
+            return false
+
+        ; Opening dropdown and navigating with Down + Esc must actually move, cancel back to ORIGINAL, and trigger 0 translations.
+        SendMessage(0x014F, 1, 0, langCtrl.Hwnd)
+        Sleep(20)
+        if (SendMessage(0x0157, 0, 0, langCtrl.Hwnd) != 1)
+            return false
+        SendMessage(0x0100, 0x28, 0, langCtrl.Hwnd)
+        Sleep(20)
+        if (langCtrl.Value <= 1)
+            return false
+        SendMessage(0x0100, 0x1B, 0, langCtrl.Hwnd)
+        Sleep(30)
+        if !(WinExist("ahk_id " OcrResultPopupHwnd)
+            && SendMessage(0x0157, 0, 0, langCtrl.Hwnd) == 0
+            && langCtrl.Text == "ORIGINAL"
+            && editCtrl.Value == "Hello OCR test"
+            && translateCalls == 0)
+            return false
+
+        ; Full-text commit: open dropdown, Down to Korean (ko), Enter -> mock translation applied.
+        SendMessage(0x014F, 1, 0, langCtrl.Hwnd)
+        Sleep(20)
+        SendMessage(0x0100, 0x28, 0, langCtrl.Hwnd)
+        Sleep(20)
+        SendMessage(0x0100, 0x0D, 0, langCtrl.Hwnd)
+        Sleep(60)
+        if !(translateCalls == 1 && lastTranslatedSource == "Hello OCR test" && editCtrl.Value == "mock:ko:Hello OCR test")
+            return false
+
+        ; Return to ORIGINAL, select "OCR" (indices 6..9), then switch to Korean (ko) -> selected-text translation applied.
+        SendMessage(0x014F, 1, 0, langCtrl.Hwnd)
+        Sleep(20)
+        SendMessage(0x0100, 0x26, 0, langCtrl.Hwnd)
+        Sleep(20)
+        SendMessage(0x0100, 0x0D, 0, langCtrl.Hwnd)
+        Sleep(40)
+        if !(langCtrl.Text == "ORIGINAL" && editCtrl.Value == "Hello OCR test")
+            return false
+
+        SendMessage(0x00B1, 6, 9, editCtrl.Hwnd)
+        Sleep(20)
+        SendMessage(0x014F, 1, 0, langCtrl.Hwnd)
+        Sleep(20)
+        SendMessage(0x0100, 0x28, 0, langCtrl.Hwnd)
+        Sleep(20)
+        SendMessage(0x0100, 0x0D, 0, langCtrl.Hwnd)
+        Sleep(60)
+        return (translateCalls == 2
+            && lastTranslatedSource == "OCR"
+            && editCtrl.Value == "mock:ko:OCR"
+            && InStr(detailsCtrl.Value, "Selected text") > 0)
+    } finally {
+        if (OcrResultPopupHwnd && WinExist("ahk_id " OcrResultPopupHwnd))
+            try WinClose("ahk_id " OcrResultPopupHwnd)
+        OcrResultPopupHwnd := oldHwnd
+        TRANSLATE_CONSENT := oldConsent
+        TEXT_TRANSLATE_MAX_CHARS := oldMaxChars
+        MANUAL_LANG := oldManualLang
+    }
+}
+
+CheckOcrInputPreprocessing() {
+    token := 0
+    bitmaps := []
+    graphicsList := []
+    brushes := []
+    TrackBmp(bmp) {
+        if bmp
+            bitmaps.Push(bmp)
+        return bmp
+    }
+    TrackGfx(gfx) {
+        if gfx
+            graphicsList.Push(gfx)
+        return gfx
+    }
+    TrackBrush(brush) {
+        if brush
+            brushes.Push(brush)
+        return brush
+    }
+    try {
+        token := Gdip_Startup()
+        if !token
+            return false
+
+        bmp1 := TrackBmp(Gdip_CreateBitmap(200, 60))
+        g1 := TrackGfx(Gdip_GraphicsFromImage(bmp1))
+        if (!bmp1 || !g1)
+            return false
+        Gdip_SetCompositingMode(g1, 1)
+        Gdip_GraphicsClear(g1, 0xFF1E1E1E)
+        edge1 := 0
+        if (!DetectOcrUniformEdgeColor(bmp1, &edge1) || edge1 != 0xFF1E1E1E)
+            return false
+        out1 := TrackBmp(CreateOcrInputBitmap(bmp1, 2600))
+        if (!out1 || Gdip_GetImageWidth(out1) != 440 || Gdip_GetImageHeight(out1) != 160
+            || Gdip_GetPixel(out1, 0, 0) != 0xFF1E1E1E || Gdip_GetPixel(out1, 220, 80) != 0xFF1E1E1E)
+            return false
+
+        bmp2 := TrackBmp(Gdip_CreateBitmap(200, 60))
+        g2 := TrackGfx(Gdip_GraphicsFromImage(bmp2))
+        bBlack := TrackBrush(Gdip_BrushCreateSolid(0xFF000000))
+        bWhite := TrackBrush(Gdip_BrushCreateSolid(0xFFFFFFFF))
+        if (!bmp2 || !g2 || !bBlack || !bWhite)
+            return false
+        Gdip_SetCompositingMode(g2, 1)
+        Gdip_FillRectangle(g2, bBlack, 0, 0, 100, 60)
+        Gdip_FillRectangle(g2, bWhite, 100, 0, 100, 60)
+        edge2 := 0
+        if DetectOcrUniformEdgeColor(bmp2, &edge2)
+            return false
+        out2 := TrackBmp(CreateOcrInputBitmap(bmp2, 2600))
+        if (!out2 || Gdip_GetImageWidth(out2) != 400 || Gdip_GetImageHeight(out2) != 120
+            || Gdip_GetPixel(out2, 0, 60) != 0xFF000000 || Gdip_GetPixel(out2, 399, 60) != 0xFFFFFFFF)
+            return false
+        r199 := (Gdip_GetPixel(out2, 199, 60) >> 16) & 0xFF
+        r200 := (Gdip_GetPixel(out2, 200, 60) >> 16) & 0xFF
+        if (r199 >= 100 || r200 <= 155 || Abs((r199 + r200) - 255) > 4)
+            return false
+
+        bmp3 := TrackBmp(Gdip_CreateBitmap(1000, 800))
+        g3 := TrackGfx(Gdip_GraphicsFromImage(bmp3))
+        if (!bmp3 || !g3)
+            return false
+        Gdip_SetCompositingMode(g3, 1)
+        Gdip_GraphicsClear(g3, 0xFFFFFFFF)
+        out3 := TrackBmp(CreateOcrInputBitmap(bmp3, 2600))
+        if (!out3 || Gdip_GetImageWidth(out3) != 1040 || Gdip_GetImageHeight(out3) != 840)
+            return false
+
+        bmp4 := TrackBmp(Gdip_CreateBitmap(100, 50))
+        g4 := TrackGfx(Gdip_GraphicsFromImage(bmp4))
+        if (!bmp4 || !g4)
+            return false
+        Gdip_SetCompositingMode(g4, 1)
+        Gdip_GraphicsClear(g4, 0xFFFFFFFF)
+        out4 := TrackBmp(CreateOcrInputBitmap(bmp4, 210.5))
+        if (!out4 || Gdip_GetImageWidth(out4) != 210 || Gdip_GetImageHeight(out4) != 110)
+            return false
+
+        bmp5 := TrackBmp(Gdip_CreateBitmap(300, 150))
+        g5 := TrackGfx(Gdip_GraphicsFromImage(bmp5))
+        if (!bmp5 || !g5)
+            return false
+        Gdip_SetCompositingMode(g5, 1)
+        Gdip_GraphicsClear(g5, 0xFFFFFFFF)
+        out5 := TrackBmp(CreateOcrInputBitmap(bmp5, 100))
+        if (!out5 || Gdip_GetImageWidth(out5) != 100 || Gdip_GetImageHeight(out5) != 50)
+            return false
+
+        bmp6 := TrackBmp(Gdip_CreateBitmap(40, 20))
+        g6 := TrackGfx(Gdip_GraphicsFromImage(bmp6))
+        if (!bmp6 || !g6)
+            return false
+        Gdip_SetCompositingMode(g6, 1)
+        Gdip_GraphicsClear(g6, 0x00000000)
+        edge6 := 0
+        if DetectOcrUniformEdgeColor(bmp6, &edge6)
+            return false
+        out6 := TrackBmp(CreateOcrInputBitmap(bmp6, 2600))
+        if (!out6 || Gdip_GetImageWidth(out6) != 80 || Gdip_GetImageHeight(out6) != 40
+            || Gdip_GetPixel(out6, 0, 0) != 0 || Gdip_GetPixel(out6, 40, 20) != 0)
+            return false
+
+        bmpSemi := TrackBmp(Gdip_CreateBitmap(100, 50))
+        gSemi := TrackGfx(Gdip_GraphicsFromImage(bmpSemi))
+        bSemi := TrackBrush(Gdip_BrushCreateSolid(0x80000000))
+        if (!bmpSemi || !gSemi || !bSemi)
+            return false
+        Gdip_SetCompositingMode(gSemi, 1)
+        Gdip_GraphicsClear(gSemi, 0xFFFFFFFF)
+        Gdip_FillRectangle(gSemi, bSemi, 25, 10, 50, 30)
+        outSemi := TrackBmp(CreateOcrInputBitmap(bmpSemi, 2600))
+        if (!outSemi || Gdip_GetImageWidth(outSemi) != 240 || Gdip_GetImageHeight(outSemi) != 140
+            || Gdip_GetPixel(outSemi, 0, 0) != 0xFFFFFFFF || Gdip_GetPixel(outSemi, 120, 70) != 0x80000000)
+            return false
+
+        bmp7 := TrackBmp(Gdip_CreateBitmap(1000, 800))
+        g7 := TrackGfx(Gdip_GraphicsFromImage(bmp7))
+        if (!bmp7 || !g7)
+            return false
+        Gdip_SetCompositingMode(g7, 1)
+        Gdip_FillRectangle(g7, bBlack, 0, 0, 500, 800)
+        Gdip_FillRectangle(g7, bWhite, 500, 0, 500, 800)
+        Gdip_SetPixel(bmp7, 500, 400, 0x01ABCDEF)
+        edge7 := 0
+        if DetectOcrUniformEdgeColor(bmp7, &edge7)
+            return false
+        out7 := TrackBmp(CreateOcrInputBitmap(bmp7, 2600))
+        return (out7 && out7 != bmp7 && Gdip_GetImageWidth(out7) == 1000 && Gdip_GetImageHeight(out7) == 800
+            && Gdip_GetPixel(out7, 0, 0) == 0xFF000000 && Gdip_GetPixel(out7, 999, 799) == 0xFFFFFFFF
+            && Gdip_GetPixel(out7, 500, 400) == 0x01ABCDEF)
+    } finally {
+        for _, brush in brushes
+            try Gdip_DeleteBrush(brush)
+        for _, gfx in graphicsList
+            try Gdip_DeleteGraphics(gfx)
+        for _, bmp in bitmaps
+            try Gdip_DisposeImage(bmp)
+        if token
+            try Gdip_Shutdown(token)
     }
 }
 
