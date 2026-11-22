@@ -7,7 +7,7 @@
 ; so --health-check and --ocr-file never terminate a running tray instance.
 #SingleInstance Off
 ;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
-;@Ahk2Exe-SetVersion 1.6.3.0
+;@Ahk2Exe-SetVersion 1.7.0.0
 ; CLI modes exit before any window or hotkey exists and must never show a dialog: this runs before
 ; the includes and globals so an error anywhere in startup ends the process with a FAIL line.
 global CLI_MODE := (A_Args.Length > 0 && (A_Args[1] == "--health-check" || A_Args[1] == "--ocr-file")) ? A_Args[1] : ""
@@ -21,7 +21,7 @@ if (CLI_MODE != "")
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
-global APP_VERSION := "1.6.3"
+global APP_VERSION := "1.7.0"
 global APP_ICON_PATH := A_IsCompiled ? A_ScriptFullPath : A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global APP_SOURCE_ICON_PATH := A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global GITHUB_RELEASES_URL := "https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases"
@@ -203,6 +203,21 @@ PrepareWindowsOcrHelper() {
     return ""
 }
 
+PrepareRapidOcrHelper() {
+    global APP_TEMP_DIR
+    sourceHelper := A_ScriptDir "\..\scripts\Invoke-RapidOcr.py"
+    if (!A_IsCompiled && FileExist(sourceHelper))
+        return sourceHelper
+    try {
+        if !DirExist(APP_TEMP_DIR)
+            DirCreate(APP_TEMP_DIR)
+        targetHelper := APP_TEMP_DIR "\Invoke-RapidOcr.py"
+        FileInstall("..\scripts\Invoke-RapidOcr.py", APP_TEMP_DIR "\Invoke-RapidOcr.py", 1)
+        return FileExist(targetHelper) ? targetHelper : ""
+    }
+    return ""
+}
+
 ; ── Per-Monitor DPI Aware V2: fixes scaling mismatches across monitors ──
 ; Use physical pixels for all coordinates so capture remains accurate across mixed-DPI monitors.
 DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
@@ -216,6 +231,7 @@ OnExit AppCleanup
 
 AppCleanup(*) {
     global pToken, TEMP_FILES
+    try CleanupActiveOcrResources()
     try Gdip_Shutdown(pToken)
     try {
         for _, filePath in TEMP_FILES {
@@ -261,6 +277,7 @@ global OCR_LANGUAGES := "ko-KR,en-US"
 global TRAY_TEXT_TRANSLATE_ITEM := ""
 global TextTranslatePopupHwnd := 0
 global OcrResultPopupHwnd := 0
+global OCR_EXTRACT_SEQ := 0
 global DashboardHwnd := 0
 global ManualHwnd := 0
 global ANNOTATION_MODE := ""
@@ -384,7 +401,7 @@ if (CLI_MODE == "--ocr-file") {
     if (A_Args.Length > 1) {
         cliLanguages := A_Args.Length > 2 ? A_Args[3] : OCR_LANGUAGES
         cliEngine := A_Args.Length > 3 ? A_Args[4] : OCR_ENGINE
-        cliResult := RunLocalOcr(A_Args[2], cliEngine, cliLanguages)
+        cliResult := RunOcrOnFile(A_Args[2], cliEngine, cliLanguages)
     } else {
         ; A malformed CLI call must still exit here; falling through would start a second tray instance.
         cliResult := { ok: false, engine: "", language: "", text: "", error: "usage: --ocr-file <image> [languages] [engine]" }
@@ -2381,39 +2398,7 @@ DetectOcrUniformEdgeColor(pBitmap, &outArgb) {
     return true
 }
 
-CreateOcrInputBitmap(pBitmap, maxDimension := 2600) {
-    static MAX_UPSCALE_SOURCE_PIXELS := 750000
-    static QUIET_ZONE_PADDING := 20
-    if (!pBitmap || !IsNumber(maxDimension))
-        return 0
-    maxDimension := Integer(Floor(maxDimension))
-    if (maxDimension < 1)
-        return 0
-    sourceW := Gdip_GetImageWidth(pBitmap)
-    sourceH := Gdip_GetImageHeight(pBitmap)
-    if (sourceW < 1 || sourceH < 1)
-        return 0
-
-    padColor := 0
-    pad := 0
-    if (sourceW > maxDimension || sourceH > maxDimension) {
-        scale := Min(maxDimension / sourceW, maxDimension / sourceH)
-        scaledW := Max(1, Min(maxDimension, Round(sourceW * scale)))
-        scaledH := Max(1, Min(maxDimension, Round(sourceH * scale)))
-    } else {
-        desiredPad := DetectOcrUniformEdgeColor(pBitmap, &padColor) ? QUIET_ZONE_PADDING : 0
-        if (sourceW * sourceH <= MAX_UPSCALE_SOURCE_PIXELS && sourceW * 2 <= maxDimension && sourceH * 2 <= maxDimension) {
-            scaledW := sourceW * 2
-            scaledH := sourceH * 2
-        } else {
-            scaledW := sourceW
-            scaledH := sourceH
-        }
-        pad := Max(0, Min(desiredPad, (maxDimension - Max(scaledW, scaledH)) // 2))
-        if (scaledW == sourceW && scaledH == sourceH && pad == 0)
-            return Gdip_CloneBitmapArea(pBitmap, 0, 0, sourceW, sourceH)
-    }
-
+DrawOcrScaledBitmap(pBitmap, sourceW, sourceH, scaledW, scaledH, pad := 0, padColor := 0) {
     outputW := scaledW + pad * 2
     outputH := scaledH + pad * 2
     output := 0
@@ -2455,31 +2440,210 @@ CreateOcrInputBitmap(pBitmap, maxDimension := 2600) {
     }
 }
 
+CreateOcrRawBitmap(pBitmap, maxDimension := 2600) {
+    if (!pBitmap || !IsNumber(maxDimension))
+        return 0
+    maxDimension := Integer(Floor(maxDimension))
+    if (maxDimension < 1)
+        return 0
+    sourceW := Gdip_GetImageWidth(pBitmap)
+    sourceH := Gdip_GetImageHeight(pBitmap)
+    if (sourceW < 1 || sourceH < 1)
+        return 0
+    if (sourceW <= maxDimension && sourceH <= maxDimension)
+        return Gdip_CloneBitmapArea(pBitmap, 0, 0, sourceW, sourceH)
+    scale := Min(maxDimension / sourceW, maxDimension / sourceH)
+    scaledW := Max(1, Min(maxDimension, Round(sourceW * scale)))
+    scaledH := Max(1, Min(maxDimension, Round(sourceH * scale)))
+    return DrawOcrScaledBitmap(pBitmap, sourceW, sourceH, scaledW, scaledH)
+}
+
+CreateOcrInputBitmap(pBitmap, maxDimension := 2600) {
+    static MAX_UPSCALE_SOURCE_PIXELS := 750000
+    static QUIET_ZONE_PADDING := 20
+    if (!pBitmap || !IsNumber(maxDimension))
+        return 0
+    maxDimension := Integer(Floor(maxDimension))
+    if (maxDimension < 1)
+        return 0
+    sourceW := Gdip_GetImageWidth(pBitmap)
+    sourceH := Gdip_GetImageHeight(pBitmap)
+    if (sourceW < 1 || sourceH < 1)
+        return 0
+
+    padColor := 0
+    pad := 0
+    if (sourceW > maxDimension || sourceH > maxDimension) {
+        scale := Min(maxDimension / sourceW, maxDimension / sourceH)
+        scaledW := Max(1, Min(maxDimension, Round(sourceW * scale)))
+        scaledH := Max(1, Min(maxDimension, Round(sourceH * scale)))
+    } else {
+        desiredPad := DetectOcrUniformEdgeColor(pBitmap, &padColor) ? QUIET_ZONE_PADDING : 0
+        if (sourceW * sourceH <= MAX_UPSCALE_SOURCE_PIXELS && sourceW * 2 <= maxDimension && sourceH * 2 <= maxDimension) {
+            scaledW := sourceW * 2
+            scaledH := sourceH * 2
+        } else {
+            scaledW := sourceW
+            scaledH := sourceH
+        }
+        pad := Max(0, Min(desiredPad, (maxDimension - Max(scaledW, scaledH)) // 2))
+        if (scaledW == sourceW && scaledH == sourceH && pad == 0)
+            return Gdip_CloneBitmapArea(pBitmap, 0, 0, sourceW, sourceH)
+    }
+    return DrawOcrScaledBitmap(pBitmap, sourceW, sourceH, scaledW, scaledH, pad, padColor)
+}
+
+RunOcrOnBitmap(pBitmap, engine, languages, cancelState := 0, tesseractRawPath := "") {
+    global APP_TEMP_DIR
+    static seq := 0
+    if !pBitmap
+        return { ok: false, engine: "Local OCR", language: "", text: "", error: "Captured image bitmap is unavailable.", noText: false }
+    engine := NormalizeOcrEngine(engine)
+    languages := ResolveOcrLanguages(languages)
+    id := DllCall("GetCurrentProcessId") "_" A_TickCount "_" (++seq)
+    rawState := { path: "", attempted: false }
+    procState := { path: "", attempted: false }
+
+    PrepareOcrImageFile(prefix, builderFn, stateObj) {
+        if !stateObj.attempted {
+            stateObj.attempted := true
+            candidate := APP_TEMP_DIR "\" prefix "_" id ".png"
+            if !DirExist(APP_TEMP_DIR)
+                DirCreate(APP_TEMP_DIR)
+            bmp := builderFn(pBitmap)
+            if !bmp
+                throw Error("Could not prepare the captured image for OCR.")
+            RegisterOcrTempFile(candidate)
+            saved := false
+            try {
+                saved := SafeSaveBitmapToFile(bmp, candidate)
+            } finally {
+                try Gdip_DisposeImage(bmp)
+                if !saved
+                    DeleteOcrTempFile(candidate)
+            }
+            if !saved
+                throw Error("Could not save the captured image for OCR.")
+            stateObj.path := candidate
+        }
+        if (stateObj.path == "")
+            throw Error("Prepared OCR image is unavailable.")
+        return stateObj.path
+    }
+
+    provider := {
+        GetRawPath: (*) => PrepareOcrImageFile("ocr_raw", CreateOcrRawBitmap, rawState),
+        GetProcessedPath: (*) => PrepareOcrImageFile("ocr_input", CreateOcrInputBitmap, procState)
+    }
+    if (tesseractRawPath != "")
+        provider.GetTesseractPath := (*) => tesseractRawPath
+    try {
+        return RunLocalOcr(provider, engine, languages, "", cancelState)
+    } catch as e {
+        return { ok: false, engine: "Local OCR", language: "", text: "", error: ShortErrorMessage(e.Message), noText: false }
+    } finally {
+        DeleteOcrTempFile(rawState.path)
+        DeleteOcrTempFile(procState.path)
+    }
+}
+
+RunOcrOnFile(filePath, engine, languages) {
+    if !FileExist(filePath)
+        return { ok: false, engine: "Local OCR", language: "", text: "", error: "Image file was not found.", noText: false }
+    isTiff := RegExMatch(filePath, "i)\.tiff?$") != 0
+    if (NormalizeOcrEngine(engine) == "tesseract" && isTiff)
+        return RunLocalOcr(filePath, "tesseract", languages)
+    pBitmap := Gdip_CreateBitmapFromFile(filePath)
+    if (!pBitmap || pBitmap == -1 || pBitmap == -2)
+        return { ok: false, engine: "Local OCR", language: "", text: "", error: "Could not load image file for OCR.", noText: false }
+    try {
+        return RunOcrOnBitmap(pBitmap, engine, languages, 0, isTiff ? filePath : "")
+    } finally {
+        try Gdip_DisposeImage(pBitmap)
+    }
+}
+
+ApplyClipOcrExtractionResult(requestId, result, fallbackLanguages, popupBitmap, showFn := 0) {
+    global OCR_EXTRACT_SEQ
+    if (requestId != OCR_EXTRACT_SEQ) {
+        if popupBitmap
+            try Gdip_DisposeImage(popupBitmap)
+        return false
+    }
+    if !IsObject(showFn)
+        ToolTip()
+    transferred := false
+    try {
+        if result.ok {
+            transferred := true
+            if IsObject(showFn)
+                showFn(result.text, result.engine, result.language, result.error, popupBitmap, fallbackLanguages)
+            else
+                ShowOcrResultPopup(result.text, result.engine, result.language, result.error, 0, popupBitmap, 0, fallbackLanguages)
+            return true
+        }
+        recoverableWarn := ""
+        if (result.HasProp("noText") && result.noText)
+            recoverableWarn := "No text detected — switch OCR language to retry"
+        else if (InStr(result.error, "NO_LANGUAGE") || InStr(result.error, "language data is missing"))
+            recoverableWarn := "Selected OCR language unavailable — switch OCR language to retry"
+        if (recoverableWarn != "") {
+            shownEngine := result.engine != "" ? result.engine : "Local OCR"
+            shownLang := result.language != "" ? result.language : StrSplit(ResolveOcrLanguages(fallbackLanguages), ",")[1]
+            transferred := true
+            if IsObject(showFn)
+                showFn("", shownEngine, shownLang, recoverableWarn, popupBitmap, fallbackLanguages)
+            else
+                ShowOcrResultPopup("", shownEngine, shownLang, recoverableWarn, 0, popupBitmap, 0, fallbackLanguages)
+            return true
+        }
+        throw Error(result.error)
+    } catch as e {
+        if (!transferred && popupBitmap)
+            try Gdip_DisposeImage(popupBitmap)
+        if (!IsObject(showFn) && requestId == OCR_EXTRACT_SEQ) {
+            ToolTip(GetOcrUserFailureMessage(e.Message))
+            SetTimer(() => ToolTip(), -4500)
+        }
+        return false
+    }
+}
+
 ExtractTextFromRightClickedClip(*) {
-    global RightClickedHwnd, ClipWins, APP_TEMP_DIR, OCR_ENGINE, OCR_LANGUAGES
+    global RightClickedHwnd, ClipWins, OCR_ENGINE, OCR_LANGUAGES, OCR_EXTRACT_SEQ
     if !ClipWins.Has(RightClickedHwnd)
         return
-    inputBitmap := 0
-    imagePath := APP_TEMP_DIR "\ocr_input_" DllCall("GetCurrentProcessId") "_" A_TickCount ".png"
+    requestId := ++OCR_EXTRACT_SEQ
+    srcBitmap := ClipWins[RightClickedHwnd].pBitmap
+    if !srcBitmap {
+        if (requestId == OCR_EXTRACT_SEQ) {
+            ToolTip(GetOcrUserFailureMessage("Captured image bitmap is unavailable."))
+            SetTimer(() => ToolTip(), -4500)
+        }
+        return
+    }
+    srcW := Gdip_GetImageWidth(srcBitmap)
+    srcH := Gdip_GetImageHeight(srcBitmap)
+    popupBitmap := (srcW >= 1 && srcH >= 1) ? Gdip_CloneBitmapArea(srcBitmap, 0, 0, srcW, srcH) : 0
+    if !popupBitmap {
+        if (requestId == OCR_EXTRACT_SEQ) {
+            ToolTip(GetOcrUserFailureMessage("Could not prepare the captured image for OCR."))
+            SetTimer(() => ToolTip(), -4500)
+        }
+        return
+    }
     try {
-        if !DirExist(APP_TEMP_DIR)
-            DirCreate(APP_TEMP_DIR)
-        inputBitmap := CreateOcrInputBitmap(ClipWins[RightClickedHwnd].pBitmap)
-        if !inputBitmap || !SafeSaveBitmapToFile(inputBitmap, imagePath)
-            throw Error("Could not prepare the captured image for OCR.")
         ToolTip("🔤 Extracting text locally…")
-        result := RunLocalOcr(imagePath, OCR_ENGINE, OCR_LANGUAGES)
-        ToolTip()
-        if !result.ok
-            throw Error(result.error)
-        ShowOcrResultPopup(result.text, result.engine, result.language, result.error)
+        result := RunOcrOnBitmap(popupBitmap, OCR_ENGINE, OCR_LANGUAGES)
+        ApplyClipOcrExtractionResult(requestId, result, OCR_LANGUAGES, popupBitmap)
     } catch as e {
-        ToolTip(GetOcrUserFailureMessage(e.Message))
-        SetTimer(() => ToolTip(), -4500)
-    } finally {
-        if inputBitmap
-            Gdip_DisposeImage(inputBitmap)
-        try FileDelete(imagePath)
+        if popupBitmap
+            try Gdip_DisposeImage(popupBitmap)
+        if (requestId == OCR_EXTRACT_SEQ) {
+            ToolTip()
+            ToolTip(GetOcrUserFailureMessage(e.Message))
+            SetTimer(() => ToolTip(), -4500)
+        }
     }
 }
 
@@ -2487,245 +2651,480 @@ TrimUnicodeWhitespace(text) {
     return RegExReplace(String(text), "(*UCP)^\s+|\s+$", "")
 }
 
-ShowOcrResultPopup(text, engine, language, warning := "", translateFn := 0) {
-    global OcrResultPopupHwnd, APP_NAME
-    if (OcrResultPopupHwnd && WinExist("ahk_id " OcrResultPopupHwnd))
-        try WinClose("ahk_id " OcrResultPopupHwnd)
+GetOcrPopupLangOptions(configuredLanguages := "", detectedLanguage := "", engine := "") {
+    options := [
+        { label: "한국어 (ko)", code: "ko-KR", baseLang: "ko" },
+        { label: "Polski (pl)", code: "pl-PL", baseLang: "pl" },
+        { label: "English (en)", code: "en-US", baseLang: "en" }
+    ]
+    seenTags := Map("ko-kr", true, "ko", true, "pl-pl", true, "pl", true, "en-us", true, "en", true)
+    AddCustomTags(rawList) {
+        norm := NormalizeOcrLanguages(rawList)
+        if (norm == "")
+            return
+        for _, tag in StrSplit(norm, ",") {
+            tagKey := StrLower(tag)
+            if (tagKey != "" && !seenTags.Has(tagKey)) {
+                seenTags[tagKey] := true
+                options.Push({ label: tag, code: tag, baseLang: GetBaseOcrLanguage(tag) })
+            }
+        }
+    }
+    AddCustomTags(configuredLanguages)
+    if (engine != "Tesseract")
+        AddCustomTags(detectedLanguage)
+    return options
+}
 
-    resultGui := Gui("+AlwaysOnTop +OwnDialogs +Resize +MinSize520x320", APP_NAME " — Local OCR")
-    resultGui.SetFont("s9", "Segoe UI")
-    titleText := resultGui.Add("Text", "x15 y12 w360 h24", "🔤 Local text extraction")
-    langLabel := resultGui.Add("Text", "x440 y14 w24 h22 Right", "🌐")
-    langCombo := resultGui.Add("DropDownList", "x470 y10 w165 Choose1", GetTextTranslationPopupLangItems())
-    baseDetails := engine (language != "" ? " · " language : "")
+GetOcrPopupLangIndex(options, detectedLanguage, configuredLanguages := "", engine := "") {
+    MatchTag(tagList) {
+        norm := NormalizeOcrLanguages(tagList)
+        firstTag := norm != "" ? StrSplit(norm, ",")[1] : ""
+        firstBase := GetBaseOcrLanguage(firstTag)
+        if (firstTag != "") {
+            for index, opt in options {
+                if (StrLower(opt.code) == StrLower(firstTag))
+                    return index
+            }
+            for index, opt in options {
+                if (opt.baseLang == firstBase)
+                    return index
+            }
+        }
+        return 0
+    }
+
+    if (engine != "Tesseract") {
+        idx := MatchTag(detectedLanguage)
+        if idx
+            return idx
+    } else {
+        for _, rawTess in StrSplit(StrLower(Trim(String(detectedLanguage))), "+") {
+            tessCode := Trim(rawTess)
+            if (tessCode == "")
+                continue
+            for index, opt in options {
+                if (GetTesseractLanguageCode(opt.code) == tessCode)
+                    return index
+            }
+        }
+    }
+
+    idx := MatchTag(configuredLanguages)
+    return idx ? idx : 1
+}
+
+FormatOcrPopupDetails(engine, language, warning := "") {
+    details := engine (language != "" ? " · " language : "")
     if (warning != "")
-        baseDetails .= " · " warning
-    detailsText := resultGui.Add("Text", "x15 y40 w620 h28 c666666", baseDetails)
-    resultEdit := resultGui.Add("Edit", "x15 y74 w620 h304 ReadOnly Multi WantTab", text)
-    copyBtn := resultGui.Add("Button", "x15 y388 w110 h30 Default", "Copy Text")
-    closeBtn := resultGui.Add("Button", "x135 y388 w90 h30", "Close")
+        details .= " · " warning
+    return details
+}
 
-    sourceText := text
-    activeSourceText := sourceText
-    activeIsSelection := false
-    currentText := { Value: sourceText }
-    lastLangIndex := 1 ; 1 = ORIGINAL
-    translationCache := Map()
-    pendingRequest := 0
-    isBusy := false
-    isAlive := true
+ShowOcrResultPopup(text, engine, language, warning := "", translateFn := 0, sourceBitmap := 0, reOcrFn := 0, configuredLanguages := "") {
+    global OcrResultPopupHwnd, APP_NAME, OCR_LANGUAGES
+    ownedBitmap := sourceBitmap
+    resultGui := 0
     popupHwnd := 0
+    onMsgAttached := false
+    wmCommandHandler := 0
+    transTimerFn := 0
+    ocrTimerFn := 0
+    pendingRequest := 0
+    pendingOcrRequest := 0
+    activeOcrCancel := 0
+    isBusy := false
+    inFlight := false
+    isAlive := true
 
-    IsPopupAlive() {
-        return isAlive && popupHwnd && WinExist("ahk_id " popupHwnd)
+    DisposeOwnedBitmap() {
+        bmp := ownedBitmap
+        ownedBitmap := 0
+        if bmp
+            try Gdip_DisposeImage(bmp)
     }
 
-    UpdateDetailsLabel(isSelection := false) {
-        try detailsText.Value := isSelection ? (baseDetails " · Selected text") : baseDetails
+    CleanupPopupState(*) {
+        global OcrResultPopupHwnd
+        if transTimerFn
+            try SetTimer(transTimerFn, 0)
+        if ocrTimerFn
+            try SetTimer(ocrTimerFn, 0)
+        if IsObject(activeOcrCancel)
+            activeOcrCancel.cancelled := true
+        pendingRequest := 0
+        pendingOcrRequest := 0
+        isAlive := false
+        if (popupHwnd && OcrResultPopupHwnd == popupHwnd)
+            OcrResultPopupHwnd := 0
+        if (onMsgAttached && wmCommandHandler) {
+            try OnMessage(0x0111, wmCommandHandler, 0)
+            onMsgAttached := false
+        }
+        if !inFlight
+            DisposeOwnedBitmap()
+        if IsObject(resultGui) {
+            try resultGui.Destroy()
+            resultGui := 0
+        }
     }
 
-    ScheduleOcrLangChange(*) {
-        global TEXT_TRANSLATE_MAX_CHARS
-        if (isBusy || !IsPopupAlive())
-            return
+    try {
+        if (OcrResultPopupHwnd && WinExist("ahk_id " OcrResultPopupHwnd))
+            try WinClose("ahk_id " OcrResultPopupHwnd)
 
-        selectedIndex := langCombo.Value
-        selectedLabel := langCombo.Text
-        if (selectedLabel == "" || selectedIndex == lastLangIndex)
-            return
+        effectiveConfigured := (configuredLanguages != "") ? configuredLanguages : (IsSet(OCR_LANGUAGES) ? OCR_LANGUAGES : "")
+        ocrLangOptions := GetOcrPopupLangOptions(effectiveConfigured, language, engine)
+        ocrLangLabels := []
+        for _, opt in ocrLangOptions
+            ocrLangLabels.Push(opt.label)
+        initialOcrLangIndex := GetOcrPopupLangIndex(ocrLangOptions, language, effectiveConfigured, engine)
+        hasReOcrSource := (ownedBitmap != 0) || IsObject(reOcrFn)
 
-        if (selectedLabel == "ORIGINAL") {
-            lastLangIndex := 1
-            activeSourceText := sourceText
-            activeIsSelection := false
-            currentText.Value := sourceText
-            resultEdit.Value := sourceText
-            UpdateDetailsLabel(false)
-            return
+        resultGui := Gui("+AlwaysOnTop +OwnDialogs +Resize +MinSize520x320", APP_NAME " — Local OCR")
+        resultGui.SetFont("s9", "Segoe UI")
+        ocrLabel := resultGui.Add("Text", "x15 y14 w54 h22", "🔤 OCR")
+        ocrLangCombo := resultGui.Add("DropDownList", "x73 y10 w130 Choose" initialOcrLangIndex (hasReOcrSource ? "" : " Disabled"), ocrLangLabels)
+        langLabel := resultGui.Add("Text", "x440 y14 w24 h22 Right", "🌐")
+        langCombo := resultGui.Add("DropDownList", "x470 y10 w165 Choose1", GetTextTranslationPopupLangItems())
+        baseDetails := FormatOcrPopupDetails(engine, language, warning)
+        detailsText := resultGui.Add("Text", "x15 y40 w620 h28 c666666", baseDetails)
+        resultEdit := resultGui.Add("Edit", "x15 y74 w620 h304 ReadOnly Multi WantTab", text)
+        copyBtn := resultGui.Add("Button", "x15 y388 w110 h30 Default", "Copy Text")
+        closeBtn := resultGui.Add("Button", "x135 y388 w90 h30", "Close")
+
+        sourceText := text
+        activeSourceText := sourceText
+        activeIsSelection := false
+        currentText := { Value: sourceText }
+        lastOcrLangIndex := initialOcrLangIndex
+        lastLangIndex := 1 ; 1 = ORIGINAL
+        translationCache := Map()
+
+        IsPopupAlive() {
+            return isAlive && popupHwnd && WinExist("ahk_id " popupHwnd)
         }
 
-        ; Snapshot selection synchronously at commit time so clicking elsewhere cannot expand scope to full text.
-        if (lastLangIndex == 1) {
-            selStart := Buffer(4, 0), selEnd := Buffer(4, 0)
-            readOk := true
-            hasSelectionRange := false
-            rawSelected := ""
+        UpdateDetailsLabel(isSelection := false) {
+            try detailsText.Value := isSelection ? (baseDetails " · Selected text") : baseDetails
+        }
+
+        SetPopupBusyControls(enabled) {
+            if !IsPopupAlive()
+                return
+            if hasReOcrSource
+                try ocrLangCombo.Enabled := enabled
+            try langCombo.Enabled := enabled
+            try copyBtn.Enabled := enabled
+        }
+
+        ScheduleOcrReRun(*) {
+            if (isBusy || !hasReOcrSource || !IsPopupAlive())
+                return
+            selectedIndex := ocrLangCombo.Value
+            if (selectedIndex < 1 || selectedIndex > ocrLangOptions.Length || selectedIndex == lastOcrLangIndex)
+                return
+            opt := ocrLangOptions[selectedIndex]
+            pendingOcrRequest := { index: selectedIndex, code: opt.code, label: opt.label }
+            isBusy := true
+            SetPopupBusyControls(false)
+            SetTimer(ExecutePendingOcrReRun, -1)
+        }
+
+        ExecutePendingOcrReRun() {
+            global OCR_ENGINE
+            req := pendingOcrRequest
+            pendingOcrRequest := 0
+            inFlight := true
+            cancelToken := { cancelled: false }
+            activeOcrCancel := cancelToken
             try {
-                SendMessage(0x00B0, selStart.Ptr, selEnd.Ptr, resultEdit.Hwnd)
-                hasSelectionRange := (NumGet(selStart, 0, "UInt") != NumGet(selEnd, 0, "UInt"))
-                if hasSelectionRange
-                    rawSelected := EditGetSelectedText(resultEdit)
-            } catch {
-                readOk := false
+                if (!IsObject(req) || !IsPopupAlive() || cancelToken.cancelled)
+                    return
+                resultEdit.Value := "🔤 Re-running local OCR…"
+                engineSetting := IsSet(OCR_ENGINE) ? OCR_ENGINE : "auto"
+                ocrRes := IsObject(reOcrFn)
+                    ? (reOcrFn.MaxParams >= 2 ? reOcrFn(req.code, cancelToken) : reOcrFn(req.code))
+                    : RunOcrOnBitmap(ownedBitmap, engineSetting, req.code, cancelToken)
+                if (!IsPopupAlive() || cancelToken.cancelled || (IsObject(ocrRes) && ocrRes.HasProp("cancelled") && ocrRes.cancelled))
+                    return
+
+                if ocrRes.ok {
+                    lastOcrLangIndex := req.index
+                    sourceText := ocrRes.text
+                    activeSourceText := sourceText
+                    activeIsSelection := false
+                    currentText.Value := sourceText
+                    resultEdit.Value := sourceText
+                    translationCache := Map()
+                    lastLangIndex := 1
+                    try langCombo.Choose(1)
+                    resEngine := (ocrRes.HasProp("engine") && ocrRes.engine != "") ? ocrRes.engine : "Local OCR"
+                    resLang := (ocrRes.HasProp("language") && ocrRes.language != "") ? ocrRes.language : req.code
+                    resWarn := ocrRes.HasProp("error") ? ocrRes.error : ""
+                    baseDetails := FormatOcrPopupDetails(resEngine, resLang, resWarn)
+                    UpdateDetailsLabel(false)
+                } else if (ocrRes.HasProp("noText") && ocrRes.noText) {
+                    lastOcrLangIndex := req.index
+                    sourceText := ""
+                    activeSourceText := ""
+                    activeIsSelection := false
+                    currentText.Value := ""
+                    resultEdit.Value := ""
+                    translationCache := Map()
+                    lastLangIndex := 1
+                    try langCombo.Choose(1)
+                    resEngine := (ocrRes.HasProp("engine") && ocrRes.engine != "") ? ocrRes.engine : "Local OCR"
+                    resLang := (ocrRes.HasProp("language") && ocrRes.language != "") ? ocrRes.language : req.code
+                    baseDetails := FormatOcrPopupDetails(resEngine, resLang, "No text detected")
+                    UpdateDetailsLabel(false)
+                } else {
+                    errMsg := ocrRes.HasProp("error") ? ocrRes.error : "Local OCR failed."
+                    try ocrLangCombo.Choose(lastOcrLangIndex)
+                    try resultEdit.Value := currentText.Value
+                    ShowTimedTooltip(GetOcrUserFailureMessage(errMsg), 3500)
+                }
+            } catch as e {
+                if (IsPopupAlive() && !cancelToken.cancelled) {
+                    try ocrLangCombo.Choose(lastOcrLangIndex)
+                    try resultEdit.Value := currentText.Value
+                    ShowTimedTooltip(GetOcrUserFailureMessage(e.Message), 3500)
+                }
+            } finally {
+                if (activeOcrCancel == cancelToken)
+                    activeOcrCancel := 0
+                pendingOcrRequest := 0
+                inFlight := false
+                isBusy := false
+                if IsPopupAlive()
+                    SetPopupBusyControls(true)
+                else
+                    DisposeOwnedBitmap()
             }
-            if !readOk {
-                try langCombo.Choose(lastLangIndex)
-                ShowTimedTooltip("⚠️ 선택한 텍스트를 읽지 못했습니다.`r`n⚠️ Could not read the selected text.", 2500)
+        }
+        ocrTimerFn := ExecutePendingOcrReRun
+
+        CancelOcrReRun(*) {
+            if (isBusy || !IsPopupAlive())
+                return
+            SetTimer(ExecutePendingOcrReRun, 0)
+            pendingOcrRequest := 0
+            try ocrLangCombo.Choose(lastOcrLangIndex)
+        }
+
+        ScheduleOcrLangChange(*) {
+            global TEXT_TRANSLATE_MAX_CHARS
+            if (isBusy || !IsPopupAlive())
+                return
+
+            selectedIndex := langCombo.Value
+            selectedLabel := langCombo.Text
+            if (selectedLabel == "" || selectedIndex == lastLangIndex)
+                return
+
+            if (selectedLabel == "ORIGINAL") {
+                lastLangIndex := 1
+                activeSourceText := sourceText
+                activeIsSelection := false
+                currentText.Value := sourceText
+                resultEdit.Value := sourceText
+                UpdateDetailsLabel(false)
                 return
             }
-            if hasSelectionRange {
-                selectedPart := TrimUnicodeWhitespace(rawSelected)
-                if (selectedPart == "") {
+
+            ; Snapshot selection synchronously at commit time so clicking elsewhere cannot expand scope to full text.
+            if (lastLangIndex == 1) {
+                selStart := Buffer(4, 0), selEnd := Buffer(4, 0)
+                readOk := true
+                hasSelectionRange := false
+                rawSelected := ""
+                try {
+                    SendMessage(0x00B0, selStart.Ptr, selEnd.Ptr, resultEdit.Hwnd)
+                    hasSelectionRange := (NumGet(selStart, 0, "UInt") != NumGet(selEnd, 0, "UInt"))
+                    if hasSelectionRange
+                        rawSelected := EditGetSelectedText(resultEdit)
+                } catch {
+                    readOk := false
+                }
+                if !readOk {
                     try langCombo.Choose(lastLangIndex)
-                    ShowTimedTooltip("⚠️ 공백이 아닌 텍스트를 선택해 주세요.`r`n⚠️ Select non-whitespace text to translate.", 2500)
+                    ShowTimedTooltip("⚠️ 선택한 텍스트를 읽지 못했습니다.`r`n⚠️ Could not read the selected text.", 2500)
                     return
                 }
-                targetSource := selectedPart
-                isSelection := true
+                if hasSelectionRange {
+                    selectedPart := TrimUnicodeWhitespace(rawSelected)
+                    if (selectedPart == "") {
+                        try langCombo.Choose(lastLangIndex)
+                        ShowTimedTooltip("⚠️ 공백이 아닌 텍스트를 선택해 주세요.`r`n⚠️ Select non-whitespace text to translate.", 2500)
+                        return
+                    }
+                    targetSource := selectedPart
+                    isSelection := true
+                } else {
+                    targetSource := TrimUnicodeWhitespace(sourceText)
+                    isSelection := false
+                }
             } else {
-                targetSource := TrimUnicodeWhitespace(sourceText)
-                isSelection := false
+                targetSource := TrimUnicodeWhitespace(activeSourceText)
+                isSelection := activeIsSelection
             }
-        } else {
-            targetSource := TrimUnicodeWhitespace(activeSourceText)
-            isSelection := activeIsSelection
-        }
 
-        if (targetSource == "") {
-            try langCombo.Choose(lastLangIndex)
-            ShowTimedTooltip("⚠️ 번역할 텍스트가 없습니다.`r`n⚠️ No text to translate.", 2500)
-            return
-        }
-
-        cacheKey := selectedLabel Chr(0x1F) targetSource
-        if translationCache.Has(cacheKey) {
-            lastLangIndex := selectedIndex
-            activeSourceText := targetSource
-            activeIsSelection := isSelection
-            currentText.Value := translationCache[cacheKey]
-            resultEdit.Value := translationCache[cacheKey]
-            UpdateDetailsLabel(isSelection)
-            return
-        }
-
-        if (StrLen(targetSource) > TEXT_TRANSLATE_MAX_CHARS) {
-            try langCombo.Choose(lastLangIndex)
-            ShowTimedTooltip("⚠️ 텍스트가 " TEXT_TRANSLATE_MAX_CHARS "자를 초과합니다. 일부만 드래그해 선택한 뒤 언어를 다시 선택해 주세요.`r`n⚠️ Text exceeds " TEXT_TRANSLATE_MAX_CHARS " chars. Select a shorter part and choose a language again.", 3500)
-            return
-        }
-
-        pendingRequest := { index: selectedIndex, label: selectedLabel, source: targetSource,
-            isSelection: isSelection, cacheKey: cacheKey }
-        isBusy := true
-        try langCombo.Enabled := false
-        try copyBtn.Enabled := false
-        SetTimer(ExecutePendingOcrTranslation, -1)
-    }
-
-    ExecutePendingOcrTranslation() {
-        req := pendingRequest
-        pendingRequest := 0
-        try {
-            if (!IsObject(req) || !IsPopupAlive())
-                return
-
-            try resultGui.Opt("+OwnDialogs")
-            if !EnsureTranslationConsent() {
-                if IsPopupAlive()
-                    try langCombo.Choose(lastLangIndex)
-                return
-            }
-            if !IsPopupAlive()
-                return
-
-            targetLang := GetTextTranslateLangCodeByLabel(req.label)
-            resultEdit.Value := UIText("translating")
-            translatedText := IsObject(translateFn)
-                ? translateFn(req.source, targetLang)
-                : TranslateTextViaGoogle(req.source, targetLang)
-            if !IsPopupAlive()
-                return
-
-            translationCache[req.cacheKey] := translatedText
-            lastLangIndex := req.index
-            activeSourceText := req.source
-            activeIsSelection := req.isSelection
-            currentText.Value := translatedText
-            resultEdit.Value := translatedText
-            UpdateDetailsLabel(req.isSelection)
-        } catch as e {
-            if IsPopupAlive() {
+            if (targetSource == "") {
                 try langCombo.Choose(lastLangIndex)
-                try resultEdit.Value := currentText.Value
-                ShowTimedTooltip(UIText("translate_failed", Map("error", ShortErrorMessage(e.Message))), 3500)
+                ShowTimedTooltip("⚠️ 번역할 텍스트가 없습니다.`r`n⚠️ No text to translate.", 2500)
+                return
             }
-        } finally {
+
+            cacheKey := selectedLabel Chr(0x1F) targetSource
+            if translationCache.Has(cacheKey) {
+                lastLangIndex := selectedIndex
+                activeSourceText := targetSource
+                activeIsSelection := isSelection
+                currentText.Value := translationCache[cacheKey]
+                resultEdit.Value := translationCache[cacheKey]
+                UpdateDetailsLabel(isSelection)
+                return
+            }
+
+            if (StrLen(targetSource) > TEXT_TRANSLATE_MAX_CHARS) {
+                try langCombo.Choose(lastLangIndex)
+                ShowTimedTooltip("⚠️ 텍스트가 " TEXT_TRANSLATE_MAX_CHARS "자를 초과합니다. 일부만 드래그해 선택한 뒤 언어를 다시 선택해 주세요.`r`n⚠️ Text exceeds " TEXT_TRANSLATE_MAX_CHARS " chars. Select a shorter part and choose a language again.", 3500)
+                return
+            }
+
+            pendingRequest := { index: selectedIndex, label: selectedLabel, source: targetSource,
+                isSelection: isSelection, cacheKey: cacheKey }
+            isBusy := true
+            SetPopupBusyControls(false)
+            SetTimer(ExecutePendingOcrTranslation, -1)
+        }
+
+        ExecutePendingOcrTranslation() {
+            req := pendingRequest
             pendingRequest := 0
-            isBusy := false
-            if IsPopupAlive() {
-                try langCombo.Enabled := true
-                try copyBtn.Enabled := true
+            inFlight := true
+            try {
+                if (!IsObject(req) || !IsPopupAlive())
+                    return
+
+                try resultGui.Opt("+OwnDialogs")
+                if !EnsureTranslationConsent() {
+                    if IsPopupAlive()
+                        try langCombo.Choose(lastLangIndex)
+                    return
+                }
+                if !IsPopupAlive()
+                    return
+
+                targetLang := GetTextTranslateLangCodeByLabel(req.label)
+                resultEdit.Value := UIText("translating")
+                translatedText := IsObject(translateFn)
+                    ? translateFn(req.source, targetLang)
+                    : TranslateTextViaGoogle(req.source, targetLang)
+                if !IsPopupAlive()
+                    return
+
+                translationCache[req.cacheKey] := translatedText
+                lastLangIndex := req.index
+                activeSourceText := req.source
+                activeIsSelection := req.isSelection
+                currentText.Value := translatedText
+                resultEdit.Value := translatedText
+                UpdateDetailsLabel(req.isSelection)
+            } catch as e {
+                if IsPopupAlive() {
+                    try langCombo.Choose(lastLangIndex)
+                    try resultEdit.Value := currentText.Value
+                    ShowTimedTooltip(UIText("translate_failed", Map("error", ShortErrorMessage(e.Message))), 3500)
+                }
+            } finally {
+                pendingRequest := 0
+                inFlight := false
+                isBusy := false
+                if IsPopupAlive()
+                    SetPopupBusyControls(true)
+                else
+                    DisposeOwnedBitmap()
             }
         }
-    }
+        transTimerFn := ExecutePendingOcrTranslation
 
-    CancelOcrLangChange(*) {
-        SetTimer(ExecutePendingOcrTranslation, 0)
-        pendingRequest := 0
-        if (!isBusy && IsPopupAlive())
+        CancelOcrLangChange(*) {
+            if (isBusy || !IsPopupAlive())
+                return
+            SetTimer(ExecutePendingOcrTranslation, 0)
+            pendingRequest := 0
             try langCombo.Choose(lastLangIndex)
-    }
-    OnOcrWmCommand(wParam, lParam, msg, hwnd) {
-        if (!IsPopupAlive() || hwnd != popupHwnd || lParam != langCombo.Hwnd)
-            return
-        notifyCode := (wParam >> 16) & 0xFFFF
-        if (notifyCode == 9)        ; CBN_SELENDOK: synchronous snapshot before any later click
-            ScheduleOcrLangChange()
-        else if (notifyCode == 10)  ; CBN_SELENDCANCEL
-            CancelOcrLangChange()
-    }
-    CopyResult(*) {
-        if (isBusy || !IsPopupAlive())
-            return
-        A_Clipboard := currentText.Value
-        ToolTip(lastLangIndex == 1 ? "✅ OCR text copied." : "✅ 번역 결과 복사 완료`r`n✅ Translation copied.")
-        SetTimer(() => ToolTip(), -1500)
-    }
-    DestroyResult(*) {
-        global OcrResultPopupHwnd
-        SetTimer(ExecutePendingOcrTranslation, 0)
-        pendingRequest := 0
-        isAlive := false
-        if (OcrResultPopupHwnd == popupHwnd)
-            OcrResultPopupHwnd := 0
-        try OnMessage(0x0111, OnOcrWmCommand, 0)
-        try resultGui.Destroy()
-    }
-    ResizeResult(guiObj, minMax, width, height) {
-        if (minMax == -1 || !isAlive)
-            return
-        m := 15
-        comboW := 165
-        labelW := 24
-        gap := 6
-        comboX := width - m - comboW
-        labelX := comboX - gap - labelW
-        titleW := Max(120, labelX - m - 8)
-        btnH := 30
-        btnY := height - 12 - btnH
-        editTop := 74
-        editH := Max(100, btnY - 10 - editTop)
+        }
 
-        titleText.Move(m, 12, titleW, 24)
-        langLabel.Move(labelX, 14, labelW, 22)
-        langCombo.Move(comboX, 10, comboW)
-        detailsText.Move(m, 40, Max(280, width - m * 2), 28)
-        resultEdit.Move(m, editTop, Max(280, width - m * 2), editH)
-        copyBtn.Move(m, btnY, 110, btnH)
-        closeBtn.Move(m + 120, btnY, 90, btnH)
-    }
+        OnOcrWmCommand(wParam, lParam, msg, hwnd) {
+            if (!IsPopupAlive() || hwnd != popupHwnd)
+                return
+            notifyCode := (wParam >> 16) & 0xFFFF
+            if (lParam == langCombo.Hwnd) {
+                if (notifyCode == 9)        ; CBN_SELENDOK: synchronous snapshot before any later click
+                    ScheduleOcrLangChange()
+                else if (notifyCode == 10)  ; CBN_SELENDCANCEL
+                    CancelOcrLangChange()
+            } else if (lParam == ocrLangCombo.Hwnd) {
+                if (notifyCode == 9)
+                    ScheduleOcrReRun()
+                else if (notifyCode == 10)
+                    CancelOcrReRun()
+            }
+        }
+        wmCommandHandler := OnOcrWmCommand
 
-    copyBtn.OnEvent("Click", CopyResult)
-    closeBtn.OnEvent("Click", DestroyResult)
-    resultGui.OnEvent("Close", DestroyResult)
-    resultGui.OnEvent("Escape", DestroyResult)
-    resultGui.OnEvent("Size", ResizeResult)
-    resultGui.Show("w650 h430")
-    popupHwnd := resultGui.Hwnd
-    OcrResultPopupHwnd := popupHwnd
-    OnMessage(0x0111, OnOcrWmCommand)
-    resultGui.GetClientPos(, , &initW, &initH)
-    ResizeResult(resultGui, 0, initW, initH)
+        CopyResult(*) {
+            if (isBusy || !IsPopupAlive())
+                return
+            A_Clipboard := currentText.Value
+            ToolTip(lastLangIndex == 1 ? "✅ OCR text copied." : "✅ 번역 결과 복사 완료`r`n✅ Translation copied.")
+            SetTimer(() => ToolTip(), -1500)
+        }
+
+        ResizeResult(guiObj, minMax, width, height) {
+            if (minMax == -1 || !isAlive)
+                return
+            m := 15
+            ocrLabelW := 54
+            ocrComboW := 130
+            comboW := 165
+            labelW := 24
+            gap := 6
+            comboX := width - m - comboW
+            labelX := comboX - gap - labelW
+            btnH := 30
+            btnY := height - 12 - btnH
+            editTop := 74
+            editH := Max(100, btnY - 10 - editTop)
+
+            ocrLabel.Move(m, 14, ocrLabelW, 22)
+            ocrLangCombo.Move(m + ocrLabelW + 4, 10, ocrComboW)
+            langLabel.Move(labelX, 14, labelW, 22)
+            langCombo.Move(comboX, 10, comboW)
+            detailsText.Move(m, 40, Max(280, width - m * 2), 28)
+            resultEdit.Move(m, editTop, Max(280, width - m * 2), editH)
+            copyBtn.Move(m, btnY, 110, btnH)
+            closeBtn.Move(m + 120, btnY, 90, btnH)
+        }
+
+        copyBtn.OnEvent("Click", CopyResult)
+        closeBtn.OnEvent("Click", CleanupPopupState)
+        resultGui.OnEvent("Close", CleanupPopupState)
+        resultGui.OnEvent("Escape", CleanupPopupState)
+        resultGui.OnEvent("Size", ResizeResult)
+        resultGui.Show("w650 h430")
+        popupHwnd := resultGui.Hwnd
+        OcrResultPopupHwnd := popupHwnd
+        OnMessage(0x0111, OnOcrWmCommand)
+        onMsgAttached := true
+        resultGui.GetClientPos(, , &initW, &initH)
+        ResizeResult(resultGui, 0, initW, initH)
+    } catch as e {
+        CleanupPopupState()
+        throw e
+    }
 }
 
 SCW_Undo(targetHwnd := 0) {

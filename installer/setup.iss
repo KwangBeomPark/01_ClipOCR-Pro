@@ -2,7 +2,7 @@
 ; Standard Per-User installer for PL Suite applications (App01 ~ App10).
 
 #ifndef MyAppVersion
-#define MyAppVersion "1.6.3"
+#define MyAppVersion "1.7.0"
 #endif
 
 #ifndef MyAppExeSource
@@ -50,8 +50,6 @@ Name: "startupicon"; Description: "Windows 시작 시 자동 실행 (Run at Wind
 [Files]
 ; Main application executable
 Source: "{#MyAppExeSource}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion; BeforeInstall: EnsureUpgradeReady
-; Optional OCR engine (included when full package is built)
-Source: "..\dist\ocr\*"; DestDir: "{app}\ocr"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Dirs]
 ; UserSetting directory preservation (never deleted on uninstall)

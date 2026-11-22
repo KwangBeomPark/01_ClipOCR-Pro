@@ -57,7 +57,9 @@ RunHealthCheckSuite(errors) {
         "translation popup language list starts with ORIGINAL")
     Check(() => TrimUnicodeWhitespace(Chr(0x00A0) Chr(0x3000) "  ") == ""
         && TrimUnicodeWhitespace(Chr(0x00A0) "ok" Chr(0x3000)) == "ok", "unicode whitespace trimming")
-    Check(() => NormalizeOcrEngine("WINDOWS") == "windows" && NormalizeOcrEngine("unknown") == "auto",
+    Check(() => NormalizeOcrEngine("WINDOWS") == "windows"
+        && NormalizeOcrEngine("RAPIDOCR") == "rapidocr"
+        && NormalizeOcrEngine("unknown") == "auto",
         "OCR engine normalization")
     Check(() => NormalizeOcrLanguages("ko_kr;EN-us;ko-KR") == "ko-KR,en-US"
         && NormalizeOcrLanguages("zh-hans-cn, SR-cyrl") == "zh-Hans-CN,sr-Cyrl"
@@ -72,7 +74,10 @@ RunHealthCheckSuite(errors) {
     Check(() => NormalizeOcrText("a`r`nb`nc`r") == "a`r`nb`r`nc", "OCR text line endings")
     Check(() => InStr(GetOcrUserFailureMessage("NO_LANGUAGE"), "Full package") > 0,
         "OCR recovery guidance")
+    Check(() => InStr(GetOcrUserFailureMessage("Portable RapidOCR is not installed"), "Auto") > 0,
+        "RapidOCR missing-runtime guidance")
     Check(() => FileExist(PrepareWindowsOcrHelper()), "embedded Windows OCR helper")
+    Check(() => FileExist(PrepareRapidOcrHelper()), "embedded RapidOCR helper")
 
     tessFixtureRoot := A_Temp "\clipocr_tessdata_" DllCall("GetCurrentProcessId")
     try {
@@ -172,6 +177,9 @@ RunHealthCheckSuite(errors) {
     Check(() => CheckSettingsSetterFailure(), "settings setters keep runtime state after failed save")
     Check(() => CheckClipWinBorderGeometry(), "floating clip border geometry across resize and restore")
     Check(() => CheckOcrPopupLayout(), "OCR popup starts on ORIGINAL with non-overlapping layout")
+    Check(() => CheckOcrPopupLangMapping(), "OCR popup language dropdown maps Tesseract and custom tags safely")
+    Check(() => CheckOcrAsyncEdgeCases(), "OCR extraction gating and mid-flight popup closing stay leak-free")
+    Check(() => CheckOcrLazyInputIsolation(), "OCR prepares engine-specific images lazily without blocking fallbacks")
     Check(() => CheckOcrInputPreprocessing(), "OCR input preprocessing scales small captures and pads uniform borders")
 }
 
@@ -320,26 +328,37 @@ CheckClipWinBorderGeometry() {
 }
 
 CheckOcrPopupLayout() {
-    global OcrResultPopupHwnd, TRANSLATE_CONSENT, TEXT_TRANSLATE_MAX_CHARS, MANUAL_LANG
+    global OcrResultPopupHwnd, TRANSLATE_CONSENT, TEXT_TRANSLATE_MAX_CHARS, MANUAL_LANG, OCR_ENGINE, OCR_LANGUAGES
     if !IsSet(OcrResultPopupHwnd)
         OcrResultPopupHwnd := 0
     oldHwnd := OcrResultPopupHwnd
     oldConsent := IsSet(TRANSLATE_CONSENT) ? TRANSLATE_CONSENT : false
     oldMaxChars := IsSet(TEXT_TRANSLATE_MAX_CHARS) ? TEXT_TRANSLATE_MAX_CHARS : 5000
     oldManualLang := IsSet(MANUAL_LANG) ? MANUAL_LANG : "en"
+    oldOcrEngine := IsSet(OCR_ENGINE) ? OCR_ENGINE : "auto"
+    oldOcrLangs := IsSet(OCR_LANGUAGES) ? OCR_LANGUAGES : "ko-KR,en-US"
     TRANSLATE_CONSENT := true
     TEXT_TRANSLATE_MAX_CHARS := 5000
     MANUAL_LANG := "en"
+    OCR_ENGINE := "auto"
+    OCR_LANGUAGES := "ko-KR,en-US"
     try {
         try DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
         translateCalls := 0
         lastTranslatedSource := ""
+        reOcrCalls := 0
+        lastReOcrLang := ""
         MockTranslate(src, lang) {
             translateCalls++
             lastTranslatedSource := src
             return "mock:" lang ":" src
         }
-        ShowOcrResultPopup("Hello OCR test", "Windows OCR", "en-US", "", MockTranslate)
+        MockReOcr(langCode) {
+            reOcrCalls++
+            lastReOcrLang := langCode
+            return { ok: true, engine: "Windows OCR", language: langCode, text: "Mock PL " langCode, error: "" }
+        }
+        ShowOcrResultPopup("Hello OCR test", "Windows OCR", "en-US", "", MockTranslate, 0, MockReOcr)
         if (!OcrResultPopupHwnd || !WinExist("ahk_id " OcrResultPopupHwnd))
             return false
 
@@ -348,29 +367,31 @@ CheckOcrPopupLayout() {
             return false
 
         textCtrls := []
-        langCtrl := 0
+        ddlCtrls := []
         editCtrl := 0
         btnCtrls := []
         for ctrl in g {
             if (ctrl.Type == "Text")
                 textCtrls.Push(ctrl)
             else if (ctrl.Type == "DDL")
-                langCtrl := ctrl
+                ddlCtrls.Push(ctrl)
             else if (ctrl.Type == "Edit")
                 editCtrl := ctrl
             else if (ctrl.Type == "Button")
                 btnCtrls.Push(ctrl)
         }
-        if (textCtrls.Length < 3 || !IsObject(langCtrl) || !IsObject(editCtrl) || btnCtrls.Length < 2)
-            return false
-        if (langCtrl.Text != "ORIGINAL" || editCtrl.Value != "Hello OCR test")
+        if (textCtrls.Length < 3 || ddlCtrls.Length < 2 || !IsObject(editCtrl) || btnCtrls.Length < 2)
             return false
 
-        titleCtrl := textCtrls[1]
+        ocrLabelCtrl := textCtrls[1]
         labelCtrl := textCtrls[2]
         detailsCtrl := textCtrls[3]
+        ocrLangCtrl := ddlCtrls[1]
+        langCtrl := ddlCtrls[2]
         copyCtrl := btnCtrls[1]
         closeCtrl := btnCtrls[2]
+        if (ocrLangCtrl.Text != "English (en)" || langCtrl.Text != "ORIGINAL" || editCtrl.Value != "Hello OCR test")
+            return false
 
         InBounds(ctrl, cw, ch) {
             ctrl.GetPos(&x, &y, &w, &h)
@@ -379,18 +400,21 @@ CheckOcrPopupLayout() {
 
         CheckBoundsAndOverlap() {
             g.GetClientPos(, , &cw, &ch)
-            for _, c in [titleCtrl, labelCtrl, langCtrl, detailsCtrl, editCtrl, copyCtrl, closeCtrl] {
+            for _, c in [ocrLabelCtrl, ocrLangCtrl, labelCtrl, langCtrl, detailsCtrl, editCtrl, copyCtrl, closeCtrl] {
                 if !InBounds(c, cw, ch)
                     return false
             }
-            titleCtrl.GetPos(&tx, &ty, &tw, &th)
+            ocrLabelCtrl.GetPos(&olx, &oly, &olw, &olh)
+            ocrLangCtrl.GetPos(&ocx, &ocy, &ocw, &och)
             labelCtrl.GetPos(&lx, &ly, &lw, &lh)
             langCtrl.GetPos(&cx, &cy, &cw2, &ch2)
             detailsCtrl.GetPos(&dx, &dy, &dw, &dh)
             editCtrl.GetPos(&ex, &ey, &ew, &eh)
             copyCtrl.GetPos(&bx, &by, &bw, &bh)
             closeCtrl.GetPos(&clx, &cly, &clw, &clh)
-            return (tx + tw < lx) && (lx + lw < cx) && (dy + dh < ey) && (ey + eh < by) && (bx + bw < clx)
+            return (olx + olw < ocx) && (ocx + ocw < lx) && (lx + lw < cx)
+                && (oly + olh < dy) && (ocy + och < dy) && (ly + lh < dy) && (cy + ch2 < dy)
+                && (dy + dh < ey) && (ey + eh < by) && (bx + bw < clx)
         }
 
         g.GetClientPos(, , &initW, &initH)
@@ -403,7 +427,26 @@ CheckOcrPopupLayout() {
         if (minW != 520 || minH != 320 || !CheckBoundsAndOverlap())
             return false
 
-        ; Opening dropdown and navigating with Down + Esc must actually move, cancel back to ORIGINAL, and trigger 0 translations.
+        ; Opening OCR language dropdown and navigating with Up + Esc must cancel back to English (en) with 0 re-OCR calls.
+        SendMessage(0x014F, 1, 0, ocrLangCtrl.Hwnd)
+        Sleep(20)
+        if (SendMessage(0x0157, 0, 0, ocrLangCtrl.Hwnd) != 1)
+            return false
+        SendMessage(0x0100, 0x26, 0, ocrLangCtrl.Hwnd)
+        Sleep(20)
+        if (ocrLangCtrl.Value != 2)
+            return false
+        SendMessage(0x0100, 0x1B, 0, ocrLangCtrl.Hwnd)
+        Sleep(30)
+        if !(WinExist("ahk_id " OcrResultPopupHwnd)
+            && SendMessage(0x0157, 0, 0, ocrLangCtrl.Hwnd) == 0
+            && ocrLangCtrl.Text == "English (en)"
+            && editCtrl.Value == "Hello OCR test"
+            && reOcrCalls == 0
+            && translateCalls == 0)
+            return false
+
+        ; Opening translation dropdown and navigating with Down + Esc must cancel back to ORIGINAL with 0 translations.
         SendMessage(0x014F, 1, 0, langCtrl.Hwnd)
         Sleep(20)
         if (SendMessage(0x0157, 0, 0, langCtrl.Hwnd) != 1)
@@ -449,10 +492,28 @@ CheckOcrPopupLayout() {
         Sleep(20)
         SendMessage(0x0100, 0x0D, 0, langCtrl.Hwnd)
         Sleep(60)
-        return (translateCalls == 2
+        if !(translateCalls == 2
             && lastTranslatedSource == "OCR"
             && editCtrl.Value == "mock:ko:OCR"
             && InStr(detailsCtrl.Value, "Selected text") > 0)
+            return false
+
+        ; Re-run local OCR on Polski (pl) without requiring translation consent; resets translation dropdown to ORIGINAL.
+        TRANSLATE_CONSENT := false
+        SendMessage(0x014F, 1, 0, ocrLangCtrl.Hwnd)
+        Sleep(20)
+        SendMessage(0x0100, 0x26, 0, ocrLangCtrl.Hwnd)
+        Sleep(20)
+        SendMessage(0x0100, 0x0D, 0, ocrLangCtrl.Hwnd)
+        Sleep(60)
+        return (reOcrCalls == 1
+            && lastReOcrLang == "pl-PL"
+            && ocrLangCtrl.Text == "Polski (pl)"
+            && editCtrl.Value == "Mock PL pl-PL"
+            && langCtrl.Text == "ORIGINAL"
+            && translateCalls == 2
+            && InStr(detailsCtrl.Value, "pl-PL") > 0
+            && !InStr(detailsCtrl.Value, "Selected text"))
     } finally {
         if (OcrResultPopupHwnd && WinExist("ahk_id " OcrResultPopupHwnd))
             try WinClose("ahk_id " OcrResultPopupHwnd)
@@ -460,7 +521,250 @@ CheckOcrPopupLayout() {
         TRANSLATE_CONSENT := oldConsent
         TEXT_TRANSLATE_MAX_CHARS := oldMaxChars
         MANUAL_LANG := oldManualLang
+        OCR_ENGINE := oldOcrEngine
+        OCR_LANGUAGES := oldOcrLangs
     }
+}
+
+CheckOcrPopupLangMapping() {
+    optsTess1 := GetOcrPopupLangOptions("pl-PL", "pol", "Tesseract")
+    if (optsTess1.Length != 3 || GetOcrPopupLangIndex(optsTess1, "pol", "pl-PL", "Tesseract") != 2)
+        return false
+
+    optsTess2 := GetOcrPopupLangOptions("", "pol+eng", "Tesseract")
+    if (optsTess2.Length != 3 || GetOcrPopupLangIndex(optsTess2, "pol+eng", "", "Tesseract") != 2)
+        return false
+
+    ; Missing kor in ko-KR,pl-PL,en-US yields pol+eng -> must select Polski (pl), not fallback Korean.
+    optsTess3 := GetOcrPopupLangOptions("ko-KR,pl-PL,en-US", "pol+eng", "Tesseract")
+    if (optsTess3.Length != 3 || GetOcrPopupLangIndex(optsTess3, "pol+eng", "ko-KR,pl-PL,en-US", "Tesseract") != 2)
+        return false
+
+    ; Distinct Chinese scripts sharing base language 'zh' must both be preserved and mapped accurately.
+    optsZh := GetOcrPopupLangOptions("zh-Hans-CN,zh-Hant-TW", "chi_tra+chi_sim", "Tesseract")
+    if (optsZh.Length != 5 || optsZh[4].code != "zh-Hans-CN" || optsZh[5].code != "zh-Hant-TW")
+        return false
+    if (GetOcrPopupLangIndex(optsZh, "chi_tra+chi_sim", "zh-Hans-CN,zh-Hant-TW", "Tesseract") != 5)
+        return false
+
+    optsCustom := GetOcrPopupLangOptions("ja-JP,en-US", "en-US", "Windows OCR")
+    return (optsCustom.Length == 4
+        && optsCustom[4].code == "ja-JP"
+        && GetOcrPopupLangIndex(optsCustom, "en-US", "ja-JP,en-US", "Windows OCR") == 3)
+}
+
+CheckOcrAsyncEdgeCases() {
+    global OcrResultPopupHwnd, OCR_EXTRACT_SEQ, OCR_ENGINE, OCR_LANGUAGES
+    if !IsSet(OcrResultPopupHwnd)
+        OcrResultPopupHwnd := 0
+    if !IsSet(OCR_EXTRACT_SEQ)
+        OCR_EXTRACT_SEQ := 0
+    oldHwnd := OcrResultPopupHwnd
+    oldSeq := OCR_EXTRACT_SEQ
+    oldEngine := IsSet(OCR_ENGINE) ? OCR_ENGINE : "auto"
+    oldLangs := IsSet(OCR_LANGUAGES) ? OCR_LANGUAGES : "ko-KR,en-US"
+    OCR_ENGINE := "auto"
+    OCR_LANGUAGES := "ko-KR,en-US"
+
+    token := 0
+    freshBmp := 0
+    noLangBmp := 0
+    tessMissingBmp := 0
+    try {
+        try DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+        token := Gdip_Startup()
+        if !token
+            return false
+
+        OCR_EXTRACT_SEQ := 10
+        staleBmp := Gdip_CreateBitmap(12, 12)
+        freshBmp := Gdip_CreateBitmap(12, 12)
+        noLangBmp := Gdip_CreateBitmap(12, 12)
+        tessMissingBmp := Gdip_CreateBitmap(12, 12)
+        if (!staleBmp || !freshBmp || !noLangBmp || !tessMissingBmp) {
+            if staleBmp
+                try Gdip_DisposeImage(staleBmp)
+            return false
+        }
+
+        spyCalls := 0
+        lastShownText := ""
+        lastShownWarn := ""
+        SpyShow(txt, eng, lang, warn, bmp, cfgLangs) {
+            spyCalls++
+            lastShownText := txt
+            lastShownWarn := warn
+            if (bmp == freshBmp)
+                freshBmp := 0
+            else if (bmp == noLangBmp)
+                noLangBmp := 0
+            else if (bmp == tessMissingBmp)
+                tessMissingBmp := 0
+            if bmp
+                try Gdip_DisposeImage(bmp)
+        }
+
+        if ApplyClipOcrExtractionResult(9, { ok: true, engine: "RapidOCR", language: "ko", text: "stale", error: "" }, "ko-KR", staleBmp, SpyShow)
+            return false
+        if (spyCalls != 0)
+            return false
+
+        if !ApplyClipOcrExtractionResult(10, { ok: true, engine: "Windows OCR", language: "pl", text: "fresh", error: "" }, "pl-PL", freshBmp, SpyShow)
+            return false
+        if (spyCalls != 1 || lastShownText != "fresh")
+            return false
+
+        if !ApplyClipOcrExtractionResult(10, { ok: false, engine: "RapidOCR", language: "ko-KR", text: "", error: "NO_LANGUAGE: RapidOCR model for requested language is not installed.", noText: false }, "ko-KR,en-US", noLangBmp, SpyShow)
+            return false
+        if (spyCalls != 2 || lastShownText != "" || !InStr(lastShownWarn, "Selected OCR language unavailable"))
+            return false
+
+        if !ApplyClipOcrExtractionResult(10, { ok: false, engine: "Tesseract", language: "", text: "", error: "Requested Tesseract language data is missing.", noText: false }, "ko-KR,en-US", tessMissingBmp, SpyShow)
+            return false
+        if (spyCalls != 3 || lastShownText != "" || !InStr(lastShownWarn, "Selected OCR language unavailable"))
+            return false
+
+        liveBmp := Gdip_CreateBitmap(20, 10)
+        if !liveBmp
+            return false
+        midFlightClosed := false
+        midFlightCancelFlagged := false
+        CloseMidFlightReOcr(langCode, cancelToken := 0) {
+            if (OcrResultPopupHwnd && WinExist("ahk_id " OcrResultPopupHwnd)) {
+                WinClose("ahk_id " OcrResultPopupHwnd)
+                midFlightClosed := true
+            }
+            if (IsObject(cancelToken) && cancelToken.HasProp("cancelled") && cancelToken.cancelled)
+                midFlightCancelFlagged := true
+            return { ok: true, engine: "Windows OCR", language: langCode, text: "late", error: "" }
+        }
+        ShowOcrResultPopup("init", "RapidOCR", "ko", "", 0, liveBmp, CloseMidFlightReOcr, "ko-KR,en-US")
+        popupId := OcrResultPopupHwnd
+        if (!popupId || !WinExist("ahk_id " popupId))
+            return false
+
+        g := GuiFromHwnd(popupId)
+        ocrLangCtrl := 0
+        for ctrl in g {
+            if (ctrl.Type == "DDL") {
+                ocrLangCtrl := ctrl
+                break
+            }
+        }
+        if !IsObject(ocrLangCtrl)
+            return false
+
+        SendMessage(0x014F, 1, 0, ocrLangCtrl.Hwnd)
+        Sleep(20)
+        SendMessage(0x0100, 0x28, 0, ocrLangCtrl.Hwnd)
+        Sleep(20)
+        SendMessage(0x0100, 0x0D, 0, ocrLangCtrl.Hwnd)
+        Sleep(80)
+        return midFlightClosed && midFlightCancelFlagged && (!OcrResultPopupHwnd || !WinExist("ahk_id " popupId))
+    } finally {
+        if (OcrResultPopupHwnd && WinExist("ahk_id " OcrResultPopupHwnd))
+            try WinClose("ahk_id " OcrResultPopupHwnd)
+        if freshBmp
+            try Gdip_DisposeImage(freshBmp)
+        if noLangBmp
+            try Gdip_DisposeImage(noLangBmp)
+        if tessMissingBmp
+            try Gdip_DisposeImage(tessMissingBmp)
+        if token
+            try Gdip_Shutdown(token)
+        OcrResultPopupHwnd := oldHwnd
+        OCR_EXTRACT_SEQ := oldSeq
+        OCR_ENGINE := oldEngine
+        OCR_LANGUAGES := oldLangs
+    }
+}
+
+CheckOcrLazyInputIsolation() {
+    global ACTIVE_OCR_JOBS
+    rawCalls := 0
+    procCalls := 0
+    tiffCalls := 0
+    FailRaw(*) {
+        rawCalls++
+        throw Error("raw prep failed")
+    }
+    FailProc(*) {
+        procCalls++
+        throw Error("proc prep failed")
+    }
+    MockTiff(*) {
+        tiffCalls++
+        return "C:\nonexistent\sample_multipage.tif"
+    }
+    provider := { GetRawPath: FailRaw, GetProcessedPath: FailProc, GetTesseractPath: MockTiff }
+
+    preCancelled := { cancelled: true }
+    cancelledRes := RunLocalOcr(provider, "auto", "ko-KR", "", preCancelled)
+    if (cancelledRes.ok || !cancelledRes.HasProp("cancelled") || !cancelledRes.cancelled || rawCalls != 0 || procCalls != 0)
+        return false
+
+    if (ResolveOcrInputPath(provider, "", "tesseract") != "C:\nonexistent\sample_multipage.tif"
+        || tiffCalls != 1 || rawCalls != 0 || procCalls != 0)
+        return false
+
+    winOnly := RunLocalOcr(provider, "windows", "ko-KR")
+    if (winOnly.ok || rawCalls != 0 || procCalls != 1 || !InStr(winOnly.error, "proc prep failed"))
+        return false
+
+    rawCalls := 0
+    procCalls := 0
+    autoUnknown := RunLocalOcr(provider, "auto", "xx-XX")
+    if (autoUnknown.ok || rawCalls != 0 || procCalls < 1 || !InStr(autoUnknown.error, "proc prep failed"))
+        return false
+
+    jobExit := 0
+    RunOcrProcessHidden(A_ComSpec " /c exit 42", &jobExit)
+    if (jobExit != 42 || ACTIVE_OCR_JOBS.Count != 0)
+        return false
+
+    timedOut := false
+    try {
+        RunOcrProcessHidden(A_WinDir "\System32\PING.EXE -n 6 127.0.0.1", &jobExit, 200)
+    } catch as e {
+        timedOut := InStr(e.Message, "timed out") > 0
+    }
+    if (!timedOut || ACTIVE_OCR_JOBS.Count != 0)
+        return false
+
+    asyncCancel := { cancelled: false }
+    cancelledMidFlight := false
+    SetTimer(() => (asyncCancel.cancelled := true), -100)
+    try {
+        RunOcrProcessHidden(A_WinDir "\System32\PING.EXE -n 6 127.0.0.1", &jobExit, 5000, asyncCancel)
+    } catch as e {
+        cancelledMidFlight := InStr(e.Message, "OCR cancelled") > 0
+    }
+    if (!cancelledMidFlight || ACTIVE_OCR_JOBS.Count != 0)
+        return false
+
+    tmpRoot := A_Temp "\clipocr_hc_rapid_" A_TickCount "_" DllCall("GetCurrentProcessId")
+    try {
+        dirLatin := tmpRoot "\latin"
+        dirKo := tmpRoot "\korean"
+        DirCreate(dirLatin "\python")
+        DirCreate(dirLatin "\models")
+        DirCreate(dirKo "\python")
+        DirCreate(dirKo "\models")
+        FileAppend("", dirLatin "\python\python.exe")
+        FileAppend("", dirLatin "\models\ch_PP-OCRv5_det_mobile.onnx")
+        FileAppend("", dirLatin "\models\latin_PP-OCRv5_rec_mobile.onnx")
+        FileAppend("", dirKo "\python\python.exe")
+        FileAppend("", dirKo "\models\ch_PP-OCRv5_det_mobile.onnx")
+        FileAppend("", dirKo "\models\korean_PP-OCRv5_rec_mobile.onnx")
+
+        koFirst := FindPortableRapidOcr("ko-KR,en-US", [dirLatin, dirKo])
+        plFirst := FindPortableRapidOcr("pl-PL,ko-KR", [dirLatin, dirKo])
+        if (!IsObject(koFirst) || koFirst.root != dirKo || !IsObject(plFirst) || plFirst.root != dirLatin)
+            return false
+    } finally {
+        try DirDelete(tmpRoot, true)
+    }
+    return true
 }
 
 CheckOcrInputPreprocessing() {
@@ -500,6 +804,10 @@ CheckOcrInputPreprocessing() {
         out1 := TrackBmp(CreateOcrInputBitmap(bmp1, 2600))
         if (!out1 || Gdip_GetImageWidth(out1) != 440 || Gdip_GetImageHeight(out1) != 160
             || Gdip_GetPixel(out1, 0, 0) != 0xFF1E1E1E || Gdip_GetPixel(out1, 220, 80) != 0xFF1E1E1E)
+            return false
+        raw1 := TrackBmp(CreateOcrRawBitmap(bmp1, 2600))
+        if (!raw1 || raw1 == bmp1 || Gdip_GetImageWidth(raw1) != 200 || Gdip_GetImageHeight(raw1) != 60
+            || Gdip_GetPixel(raw1, 0, 0) != 0xFF1E1E1E)
             return false
 
         bmp2 := TrackBmp(Gdip_CreateBitmap(200, 60))
@@ -551,6 +859,9 @@ CheckOcrInputPreprocessing() {
         Gdip_GraphicsClear(g5, 0xFFFFFFFF)
         out5 := TrackBmp(CreateOcrInputBitmap(bmp5, 100))
         if (!out5 || Gdip_GetImageWidth(out5) != 100 || Gdip_GetImageHeight(out5) != 50)
+            return false
+        raw5 := TrackBmp(CreateOcrRawBitmap(bmp5, 100))
+        if (!raw5 || Gdip_GetImageWidth(raw5) != 100 || Gdip_GetImageHeight(raw5) != 50)
             return false
 
         bmp6 := TrackBmp(Gdip_CreateBitmap(40, 20))

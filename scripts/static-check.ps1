@@ -27,6 +27,7 @@ foreach ($scriptPath in @(
     (Join-Path $PSScriptRoot "build.ps1"),
     (Join-Path $PSScriptRoot "publish.ps1"),
     (Join-Path $PSScriptRoot "Invoke-WindowsOcr.ps1"),
+    (Join-Path $PSScriptRoot "Prepare-RapidOcrRuntime.ps1"),
     $PSCommandPath
 )) {
     $tokens = $null
@@ -90,9 +91,17 @@ foreach ($readOnlyModule in @("SuiteRegistry.ahk", "OcrService.ahk", "HealthChec
 
 $ocrText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "src\OcrService.ahk")
 $ocrHelperText = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "Invoke-WindowsOcr.ps1")
+$rapidOcrHelperPath = Join-Path $PSScriptRoot "Invoke-RapidOcr.py"
 Assert-Project ($ocrText -notmatch 'https?://|GoogleTranslate|EnsureTranslationConsent') "Local OCR service crosses the external-service boundary."
 Assert-Project ($ocrHelperText -notmatch 'Invoke-WebRequest|HttpClient|WebClient|https?://') "Windows OCR helper contains network access."
+Assert-Project (Test-Path -LiteralPath $rapidOcrHelperPath -PathType Leaf) "RapidOCR helper is missing."
+if (Test-Path -LiteralPath $rapidOcrHelperPath -PathType Leaf) {
+    $rapidOcrHelperText = Get-Content -Raw -LiteralPath $rapidOcrHelperPath
+    Assert-Project ($rapidOcrHelperText -notmatch 'https?://|\burllib\b|\brequests\b|\bhttp\.client\b|\bsocket\b|download_file|DownloadFile') "RapidOCR helper contains network access."
+    Assert-Project ($rapidOcrHelperText -match 'APPROVED_MODEL_SHA256' -and $rapidOcrHelperText -match 'custom_metadata_map' -and $rapidOcrHelperText -match 'REQUIRED_RAPIDOCR_VERSION' -and $rapidOcrHelperText -match 'REQUIRED_ONNXRUNTIME_VERSION') "RapidOCR helper must verify model checksums, runtime versions, and embedded dictionary metadata."
+}
 Assert-Project ($main -match 'FileInstall\("\.\.\\scripts\\Invoke-WindowsOcr\.ps1"') "Compiled OCR helper embedding is missing."
+Assert-Project ($main -match 'FileInstall\("\.\.\\scripts\\Invoke-RapidOcr\.py"') "Compiled RapidOCR helper embedding is missing."
 
 # Matches an invocation of $Executable with $Verb in every form the scripts use: a bare command
 # (`git push`, `& git -C $root push`) or an argument array (`Invoke-Native git @("push", ...)`,
@@ -110,8 +119,11 @@ function Get-NativeCallPattern {
 
 $buildText = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "build.ps1")
 $publishText = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "publish.ps1")
+$setupIssText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "installer\setup.iss")
 Assert-Project ($buildText -notmatch (Get-NativeCallPattern 'git' 'push')) "Build script must not push."
 Assert-Project ($buildText -notmatch '(?im)(?:^|[=(&|;{]|Invoke-Native(?:Checked)?)\s*gh(?:\.exe)?(?:\s|$)') "Build script must not invoke gh."
+Assert-Project ($buildText -notmatch 'CLIPOCR_RAPIDOCR_DIR|Prepare-RapidOcrRuntime') "Build script must not reference CLIPOCR_RAPIDOCR_DIR or Prepare-RapidOcrRuntime."
+Assert-Project ($setupIssText -notmatch 'dist[/\\]ocr|DestDir:\s*"\{app\}\\ocr"') "Light installer script must not sweep dist\ocr into {app}\ocr."
 Assert-Project ($publishText -notmatch (Get-NativeCallPattern 'git' '(?:commit|add)')) "Publish script must not create commits."
 Assert-Project (Test-Path -LiteralPath (Join-Path $repoRoot "docs\OCR_PACKAGING.md") -PathType Leaf) "OCR deployment guide is missing."
 

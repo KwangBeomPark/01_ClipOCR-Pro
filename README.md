@@ -18,7 +18,7 @@ In routine administration, finance, and operations work, team members frequently
 - **🖍️ Quick Annotation**: Mark captured images with red boxes, highlights, arrows, numbered pins, text notes, and mosaic masking for sensitive information.
 - **🌐 Selected Text Translation**: Translate selected text using the configured translation workflow.
 - **🖼️ Image Translation Workflow**: Send captured images to Google Image Translation when needed for email attachments, scanned documents, and overseas evidence.
-- **🔤 Local OCR**: Extract text from a floating capture without uploading the image. Auto mode uses Windows OCR first and an approved portable Tesseract runtime when available.
+- **🔤 Local OCR**: Extract text from a floating capture without uploading the image. Auto mode uses offline local RapidOCR PP-OCRv5 (when installed) for Korean, Windows OCR for Polish/English/other languages and fallback, optional portable Tesseract, and lets you switch OCR languages inside the result popup.
 - **📐 Image Resize & Copy**: Resize captured images to a configured width from 400 to 1600 px before pasting them into documents, emails, or reports.
 - **📧 Outlook Web Mail Estimate**: Estimate the attachment-free message size in MB from copied body data plus conservative subject, header, and encoding allowances.
 - **🖥️ Multi-Monitor Support**: Use capture and floating windows across multi-monitor office environments.
@@ -108,7 +108,7 @@ ClipOCR-Pro stores per-user configuration data in an INI file inside its `UserSe
 %LOCALAPPDATA%\Programs\ClipOCR\UserSetting\config.ini
 ```
 
-Current settings include clipboard image size, automatic clipboard copy, file-save preset, floating clip window border (color and thickness), save folder, translation options, local OCR engine/languages, UI language, and the one-time translation consent flag. Auto OCR defaults to `ko-KR,en-US`: it tries an installed matching Windows OCR language first, then portable Tesseract, then another requested Windows language. App-local settings always take precedence over managed Suite defaults.
+Current settings include clipboard image size, automatic clipboard copy, file-save preset, floating clip window border (color and thickness), save folder, translation options, local OCR engine/languages, UI language, and the one-time translation consent flag. Auto OCR defaults to `ko-KR,en-US`: when Korean is primary it tries local RapidOCR PP-OCRv5 → Windows OCR → portable Tesseract → remaining fallback languages; for other primary languages it tries Windows OCR → portable Tesseract → RapidOCR → remaining fallback languages. App-local settings always take precedence over managed Suite defaults.
 
 When an administrator enables the optional `PL_Suite\ClipOCR` integration, ClipOCR-Pro can read managed defaults for capture behavior and the explicit `Ctrl + S` save folder. Existing values under the app-owned path above always win, and the Suite registry is never written by the app. Translation consent remains app-local. Managed folders are never used to save captures automatically.
 

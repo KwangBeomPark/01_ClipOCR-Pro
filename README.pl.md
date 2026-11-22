@@ -18,7 +18,7 @@ W codziennej pracy administracyjnej i finansowej pracownicy często tworzą zrzu
 - **🖍️ Szybkie adnotacje**: Dodawaj ramki, zakreślenia, strzałki, numerowane znaczniki, notatki tekstowe oraz mozaikę (zamazywanie) dla danych wrażliwych.
 - **🌐 Tłumaczenie zaznaczonego tekstu**: Błyskawicznie tłumacz zaznaczony tekst przy użyciu skonfigurowanego przepływu pracy Google Translate.
 - **🖼️ Tłumaczenie obrazów**: Wysyłaj zrzuty do Tłumacza Obrazów Google w przypadku zagranicznych faktur, skanów i załączników.
-- **🔤 Lokalne OCR**: Wyodrębniaj tekst bezpośrednio z pływającego zrzutu bez wysyłania obrazu na zewnątrz. Tryb automatyczny najpierw używa Windows OCR, a w razie dostępności zatwierdzonego środowiska Tesseract.
+- **🔤 Lokalne OCR**: Wyodrębniaj tekst bezpośrednio z pływającego zrzutu bez wysyłania obrazu na zewnątrz. Tryb automatyczny używa lokalnego RapidOCR PP-OCRv5 (gdy zainstalowany) dla języka koreańskiego, Windows OCR dla języka polskiego, angielskiego i innych oraz opcjonalnie przenośnego Tesseract, a w oknie wyników pozwala przełączyć język OCR.
 - **📐 Zmiana rozmiaru i kopiowanie**: Dopasuj szerokość zrzutu (od 400 do 1600 px) przed wklejeniem do wiadomości e-mail lub raportu.
 - **📧 Szacowanie rozmiaru wiadomości Outlook Web**: Oszacuj rozmiar tworzonej wiadomości w MB na podstawie zawartości schowka oraz nagłówków.
 - **🖥️ Obsługa wielu monitorów**: Pełne wsparcie dla konfiguracji wielomonitorowych w środowisku biurowym.
