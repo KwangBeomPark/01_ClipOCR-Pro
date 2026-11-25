@@ -181,6 +181,8 @@ RunHealthCheckSuite(errors) {
     Check(() => CheckOcrAsyncEdgeCases(), "OCR extraction gating and mid-flight popup closing stay leak-free")
     Check(() => CheckOcrLazyInputIsolation(), "OCR prepares engine-specific images lazily without blocking fallbacks")
     Check(() => CheckOcrInputPreprocessing(), "OCR input preprocessing scales small captures and pads uniform borders")
+    Check(() => CheckAnnotationTools(), "annotation number pin, mosaic alpha integrity, and DPI coordinate mapping")
+    Check(() => CheckClipboardAndOutputQuality(), "1:1 output bitmap fidelity and lossless PNG/DIB clipboard encoding")
 }
 
 CheckSettingsSetterFailure() {
@@ -913,6 +915,450 @@ CheckOcrInputPreprocessing() {
             try Gdip_DeleteGraphics(gfx)
         for _, bmp in bitmaps
             try Gdip_DisposeImage(bmp)
+        if token
+            try Gdip_Shutdown(token)
+    }
+}
+
+CheckAnnotationTools() {
+    global ClipWins, WINDOW_BORDER_WIDTH, WINDOW_BORDER_COLOR, UNDO_MAX
+    oldBorderW := IsSet(WINDOW_BORDER_WIDTH) ? WINDOW_BORDER_WIDTH : 1
+    oldBorderColor := IsSet(WINDOW_BORDER_COLOR) ? WINDOW_BORDER_COLOR : "000000"
+    oldUndoMax := IsSet(UNDO_MAX) ? UNDO_MAX : 5
+    if !IsSet(ClipWins)
+        ClipWins := Map()
+    WINDOW_BORDER_WIDTH := 1
+    WINDOW_BORDER_COLOR := "000000"
+    UNDO_MAX := 5
+
+    token := 0
+    clipHwnd := 0
+    bitmaps := []
+    graphicsList := []
+    brushes := []
+    TrackBmp(bmp) {
+        if bmp
+            bitmaps.Push(bmp)
+        return bmp
+    }
+    TrackGfx(gfx) {
+        if gfx
+            graphicsList.Push(gfx)
+        return gfx
+    }
+    TrackBrush(brush) {
+        if brush
+            brushes.Push(brush)
+        return brush
+    }
+    try {
+        token := Gdip_Startup()
+        if !token
+            return false
+
+        bmpNum := TrackBmp(Gdip_CreateBitmap(100, 100))
+        gNum := TrackGfx(Gdip_GraphicsFromImage(bmpNum))
+        bWhite := TrackBrush(Gdip_BrushCreateSolid(0xFFFFFFFF))
+        bRed := TrackBrush(Gdip_BrushCreateSolid(0xFFFF0000))
+        bBlue := TrackBrush(Gdip_BrushCreateSolid(0xFF0000FF))
+        if (!bmpNum || !gNum || !bWhite || !bRed || !bBlue)
+            return false
+
+        Gdip_SetCompositingMode(gNum, 1)
+        Gdip_FillRectangle(gNum, bWhite, 0, 0, 100, 100)
+        Gdip_SetCompositingMode(gNum, 0)
+        Gdip_SetSmoothingMode(gNum, 4)
+        Gdip_FillEllipse(gNum, bRed, 35, 35, 30, 30)
+        Gdip_SetSmoothingMode(gNum, 0)
+        numStatus := Gdip_TextToGraphics(gNum, "1", "x35 y35 cFFFFFFFF s13 Bold Center vCenter", "Arial", 30, 30)
+        if (numStatus != 0)
+            return false
+
+        foundWhiteCenter := false
+        foundRedRing := false
+        loop 17 {
+            yy := 42 + A_Index - 1
+            loop 17 {
+                xx := 42 + A_Index - 1
+                if (Gdip_GetPixel(bmpNum, xx, yy) == 0xFFFFFFFF) {
+                    foundWhiteCenter := true
+                    break 2
+                }
+            }
+        }
+        loop 6 {
+            if (Gdip_GetPixel(bmpNum, 37 + A_Index - 1, 50) == 0xFFFF0000) {
+                foundRedRing := true
+                break
+            }
+        }
+        if (!foundWhiteCenter || !foundRedRing)
+            return false
+
+        bmpMos := TrackBmp(Gdip_CreateBitmap(120, 60))
+        gMos := TrackGfx(Gdip_GraphicsFromImage(bmpMos))
+        bBlack := TrackBrush(Gdip_BrushCreateSolid(0xFF000000))
+        if (!bmpMos || !gMos || !bBlack)
+            return false
+        Gdip_SetCompositingMode(gMos, 1)
+        Gdip_FillRectangle(gMos, bWhite, 0, 0, 120, 60)
+        Gdip_FillRectangle(gMos, bBlue, 9, 9, 1, 1)
+        Gdip_FillRectangle(gMos, bBlue, 110, 50, 1, 1)
+        loop 10 {
+            by := 10 + (A_Index - 1) * 2
+            loop 20 {
+                bx := 10 + (A_Index - 1) * 2
+                if Mod(A_Index + ((by - 10) // 2), 2) == 0
+                    Gdip_FillRectangle(gMos, bBlack, bx, by, 2, 2)
+            }
+        }
+        Gdip_SetCompositingMode(gMos, 0)
+
+        ApplyMosaicRegion(gMos, bmpMos, 10, 10, 40, 20)
+        alphaCorrupted := 0
+        grayAveraged := 0
+        loop 20 {
+            yy := 10 + A_Index - 1
+            loop 40 {
+                xx := 10 + A_Index - 1
+                px := Gdip_GetPixel(bmpMos, xx, yy)
+                if (((px >> 24) & 0xFF) < 255)
+                    alphaCorrupted++
+                if (px != 0xFFFFFFFF && px != 0xFF000000)
+                    grayAveraged++
+            }
+        }
+        block00 := Gdip_GetPixel(bmpMos, 10, 10)
+        blockConsistent := true
+        loop 4 {
+            dy := A_Index - 1
+            loop 4 {
+                dx := A_Index - 1
+                if (Gdip_GetPixel(bmpMos, 10 + dx, 10 + dy) != block00) {
+                    blockConsistent := false
+                    break 2
+                }
+            }
+        }
+        if (alphaCorrupted != 0 || grayAveraged == 0 || !blockConsistent)
+            return false
+        if (Gdip_GetPixel(bmpMos, 9, 9) != 0xFF0000FF || Gdip_GetPixel(bmpMos, 110, 50) != 0xFF0000FF)
+            return false
+
+        ApplyMosaicRegion(gMos, bmpMos, 10, 10, 80, 12)
+        loop 12 {
+            yy := 10 + A_Index - 1
+            loop 80 {
+                xx := 10 + A_Index - 1
+                if (((Gdip_GetPixel(bmpMos, xx, yy) >> 24) & 0xFF) < 255)
+                    return false
+            }
+        }
+
+        pt100 := MapScreenPointToBitmap(150, 220, 100, 200, 200, 100, 200, 100)
+        if (pt100.x != 50 || pt100.y != 20)
+            return false
+        rc150 := MapScreenRectToBitmap(130, 215, 90, 60, 100, 200, 300, 150, 200, 100)
+        if (rc150.x != 20 || rc150.y != 10 || rc150.w != 60 || rc150.h != 40)
+            return false
+        ptEdge := MapScreenPointToBitmap(399, 249, 100, 100, 300, 150, 100, 50)
+        if (ptEdge.x != 99 || ptEdge.y != 49)
+            return false
+        pt200 := MapScreenPointToBitmap(250, 250, 100, 100, 400, 400, 200, 200)
+        if (pt200.x != 75 || pt200.y != 75)
+            return false
+
+        initClip := Gdip_CreateBitmap(40, 40)
+        gInit := initClip ? Gdip_GraphicsFromImage(initClip) : 0
+        bInit := TrackBrush(Gdip_BrushCreateSolid(0xFF112233))
+        if (!initClip || !gInit || !bInit) {
+            if gInit
+                try Gdip_DeleteGraphics(gInit)
+            if initClip
+                try Gdip_DisposeImage(initClip)
+            return false
+        }
+        Gdip_SetCompositingMode(gInit, 1)
+        Gdip_FillRectangle(gInit, bInit, 0, 0, 40, 40)
+        Gdip_DeleteGraphics(gInit)
+        clipHwnd := CreateClipWin(initClip, 50, 50)
+        if !clipHwnd {
+            try Gdip_DisposeImage(initClip)
+            return false
+        }
+        try {
+            info := ClipWins[clipHwnd]
+            realPicCtrl := info.picCtrl
+            failCtrl := {}
+            failCtrl.DefineProp("Value", { Set: (*) => ThrowSimulatedUiError() })
+            ThrowSimulatedUiError() {
+                throw Error("simulated UI error")
+            }
+
+            failCommitBmp := Gdip_CreateBitmap(40, 40)
+            if !failCommitBmp
+                return false
+            try {
+                info.picCtrl := failCtrl
+                failedRollback := false
+                try {
+                    CommitClipBitmapUpdate(info, failCommitBmp, true, 2)
+                } catch as e {
+                    failedRollback := InStr(e.Message, "simulated UI error") > 0
+                } finally {
+                    info.picCtrl := realPicCtrl
+                }
+            } finally {
+                try Gdip_DisposeImage(failCommitBmp)
+            }
+            if (!failedRollback || info.pBitmap != initClip || info.AnnotSeq != 1 || info.UndoStack.Length != 0 || info.UndoSeqStack.Length != 0)
+                return false
+
+            staleBmp := Gdip_CreateBitmap(40, 40)
+            if !staleBmp
+                return false
+            try {
+                staleRejected := false
+                try {
+                    CommitClipBitmapUpdate(info, staleBmp, true, 2, info.bitmapRevision + 99)
+                } catch as e {
+                    staleRejected := InStr(e.Message, "Clip image changed") > 0
+                }
+            } finally {
+                try Gdip_DisposeImage(staleBmp)
+            }
+            if (!staleRejected || info.pBitmap != initClip || info.AnnotSeq != 1 || info.UndoStack.Length != 0)
+                return false
+
+            nextClip := Gdip_CreateBitmap(40, 40)
+            gNext := nextClip ? Gdip_GraphicsFromImage(nextClip) : 0
+            if (!nextClip || !gNext) {
+                if nextClip
+                    try Gdip_DisposeImage(nextClip)
+                return false
+            }
+            Gdip_SetCompositingMode(gNext, 1)
+            Gdip_FillRectangle(gNext, bRed, 0, 0, 40, 40)
+            Gdip_DeleteGraphics(gNext)
+            CommitClipBitmapUpdate(info, nextClip, true, 2, info.bitmapRevision)
+            if (info.pBitmap != nextClip || info.AnnotSeq != 2 || info.UndoStack.Length != 1 || info.UndoSeqStack.Length != 1 || info.bitmapRevision != 1)
+                return false
+
+            info.picCtrl := failCtrl
+            failedUndo := false
+            try {
+                SCW_Undo(clipHwnd)
+            } catch as e {
+                failedUndo := InStr(e.Message, "simulated UI error") > 0
+            } finally {
+                info.picCtrl := realPicCtrl
+            }
+            if (!failedUndo || info.pBitmap != nextClip || info.AnnotSeq != 2 || info.UndoStack.Length != 1 || info.UndoSeqStack.Length != 1 || info.bitmapRevision != 1)
+                return false
+
+            SCW_Undo(clipHwnd)
+            return (info.pBitmap == initClip && info.AnnotSeq == 1 && info.UndoStack.Length == 0 && info.UndoSeqStack.Length == 0
+                && info.bitmapRevision == 2 && Gdip_GetPixel(info.pBitmap, 10, 10) == 0xFF112233)
+        } finally {
+            if (clipHwnd && ClipWins.Has(clipHwnd))
+                try CloseClipWin(ClipWins[clipHwnd].gui)
+        }
+    } finally {
+        for _, brush in brushes
+            try Gdip_DeleteBrush(brush)
+        for _, gfx in graphicsList
+            try Gdip_DeleteGraphics(gfx)
+        for _, bmp in bitmaps
+            try Gdip_DisposeImage(bmp)
+        if token
+            try Gdip_Shutdown(token)
+        WINDOW_BORDER_WIDTH := oldBorderW
+        WINDOW_BORDER_COLOR := oldBorderColor
+        UNDO_MAX := oldUndoMax
+    }
+}
+
+CheckClipboardAndOutputQuality() {
+    token := 0
+    src := 0, outOrig := 0, outScaled := 0, decoded := 0
+    gSrc := 0, bWhite := 0, bAccent := 0, pPen := 0
+    pStream := 0, hMem := 0
+    try {
+        token := Gdip_Startup()
+        if !token
+            return false
+
+        src := Gdip_CreateBitmap(64, 32)
+        gSrc := src ? Gdip_GraphicsFromImage(src) : 0
+        bWhite := Gdip_BrushCreateSolid(0xFFFFFFFF)
+        bAccent := Gdip_BrushCreateSolid(0xFF1E88E5)
+        pPen := Gdip_CreatePen(0xFF000000, 1)
+        if (!src || !gSrc || !bWhite || !bAccent || !pPen)
+            return false
+
+        Gdip_SetCompositingMode(gSrc, 1)
+        Gdip_FillRectangle(gSrc, bWhite, 0, 0, 64, 32)
+        Gdip_DrawRectangle(gSrc, pPen, 0, 0, 63, 31)
+        Gdip_FillRectangle(gSrc, bAccent, 8, 8, 24, 14)
+        Gdip_DeleteGraphics(gSrc), gSrc := 0
+
+        outOrig := CreateOutputBitmap(src, 0, false)
+        if (!outOrig || outOrig == src || Gdip_GetImageWidth(outOrig) != 64 || Gdip_GetImageHeight(outOrig) != 32)
+            return false
+        loop 32 {
+            yy := A_Index - 1
+            loop 64 {
+                xx := A_Index - 1
+                if (Gdip_GetPixel(outOrig, xx, yy) != Gdip_GetPixel(src, xx, yy))
+                    return false
+            }
+        }
+
+        outScaled := CreateOutputBitmap(src, 400, false)
+        if (!outScaled || Gdip_GetImageWidth(outScaled) != 400 || Gdip_GetImageHeight(outScaled) != 200)
+            return false
+
+        pngBuf := EncodeBitmapToPngBuffer(src)
+        if (!IsObject(pngBuf) || pngBuf.Size < 24)
+            return false
+        sigBytes := [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        for idx, bVal in sigBytes {
+            if (NumGet(pngBuf, idx - 1, "UChar") != bVal)
+                return false
+        }
+
+        hMem := AllocClipboardGlobalFromBuffer(pngBuf)
+        if !hMem
+            return false
+        if (DllCall("ole32\CreateStreamOnHGlobal", "Ptr", hMem, "Int", true, "Ptr*", &pStream, "Int") < 0 || !pStream)
+            return false
+        hMem := 0 ; owned by pStream
+        if (DllCall("gdiplus\GdipCreateBitmapFromStream", "Ptr", pStream, "Ptr*", &decoded, "Int") != 0 || !decoded)
+            return false
+        if (Gdip_GetImageWidth(decoded) != 64 || Gdip_GetImageHeight(decoded) != 32)
+            return false
+        loop 32 {
+            yy := A_Index - 1
+            loop 64 {
+                xx := A_Index - 1
+                if (Gdip_GetPixel(decoded, xx, yy) != Gdip_GetPixel(src, xx, yy))
+                    return false
+            }
+        }
+
+        dibBuf := BuildDibClipboardBuffer(src)
+        if (!IsObject(dibBuf) || dibBuf.Size != (40 + 64 * 32 * 4))
+            return false
+        if (NumGet(dibBuf, 0, "UInt") != 40
+            || NumGet(dibBuf, 4, "Int") != 64
+            || NumGet(dibBuf, 8, "Int") != 32
+            || NumGet(dibBuf, 24, "Int") != 3780
+            || NumGet(dibBuf, 28, "Int") != 3780)
+            return false
+        if (NumGet(dibBuf, 40 + ((31 - 10) * 64 + 10) * 4, "UInt") != 0xFF1E88E5
+            || NumGet(dibBuf, 40 + ((31 - 0) * 64 + 0) * 4, "UInt") != 0xFF000000)
+            return false
+
+        if (EnvGet("CLIPOCR_TEST_LIVE_CLIPBOARD") == "1") {
+            savedClip := ClipboardAll()
+            clipTouched := true
+            SetBitmapToClipboardLossless(src)
+            pngFmt := DllCall("RegisterClipboardFormatW", "WStr", "PNG", "UInt")
+            if (!pngFmt || !DllCall("IsClipboardFormatAvailable", "UInt", pngFmt, "Int")
+                || !DllCall("IsClipboardFormatAvailable", "UInt", 8, "Int"))
+                return false
+            if !DllCall("OpenClipboard", "Ptr", A_ScriptHwnd, "Int")
+                return false
+            clipPngStream := 0, clipPngBmp := 0
+            try {
+                hClipPng := DllCall("GetClipboardData", "UInt", pngFmt, "Ptr")
+                hClipDib := DllCall("GetClipboardData", "UInt", 8, "Ptr")
+                if (!hClipPng || !hClipDib)
+                    return false
+                pngClipSize := DllCall("GlobalSize", "Ptr", hClipPng, "UPtr")
+                dibClipSize := DllCall("GlobalSize", "Ptr", hClipDib, "UPtr")
+                if (pngClipSize < pngBuf.Size || dibClipSize < dibBuf.Size)
+                    return false
+
+                pClipPng := DllCall("GlobalLock", "Ptr", hClipPng, "Ptr")
+                if !pClipPng
+                    return false
+                pngCopyMem := 0
+                try {
+                    pngCopyMem := DllCall("GlobalAlloc", "UInt", 0x0002, "UPtr", pngBuf.Size, "Ptr")
+                    if !pngCopyMem
+                        return false
+                    pCopyDest := DllCall("GlobalLock", "Ptr", pngCopyMem, "Ptr")
+                    if !pCopyDest
+                        return false
+                    try DllCall("RtlMoveMemory", "Ptr", pCopyDest, "Ptr", pClipPng, "UPtr", pngBuf.Size)
+                    finally DllCall("GlobalUnlock", "Ptr", pngCopyMem)
+                    if (DllCall("ole32\CreateStreamOnHGlobal", "Ptr", pngCopyMem, "Int", true, "Ptr*", &clipPngStream, "Int") < 0 || !clipPngStream)
+                        return false
+                    pngCopyMem := 0
+                    if (DllCall("gdiplus\GdipCreateBitmapFromStream", "Ptr", clipPngStream, "Ptr*", &clipPngBmp, "Int") != 0 || !clipPngBmp)
+                        return false
+                    loop 32 {
+                        yy := A_Index - 1
+                        loop 64 {
+                            xx := A_Index - 1
+                            if (Gdip_GetPixel(clipPngBmp, xx, yy) != Gdip_GetPixel(src, xx, yy))
+                                return false
+                        }
+                    }
+                } finally {
+                    if clipPngBmp
+                        try Gdip_DisposeImage(clipPngBmp)
+                    if clipPngStream
+                        try ObjRelease(clipPngStream)
+                    if pngCopyMem
+                        try DllCall("GlobalFree", "Ptr", pngCopyMem)
+                    DllCall("GlobalUnlock", "Ptr", hClipPng)
+                }
+
+                pClipDib := DllCall("GlobalLock", "Ptr", hClipDib, "Ptr")
+                if !pClipDib
+                    return false
+                try {
+                    if (NumGet(pClipDib + 0, 0, "UInt") != 40
+                        || NumGet(pClipDib + 0, 4, "Int") != 64
+                        || NumGet(pClipDib + 0, 8, "Int") != 32
+                        || NumGet(pClipDib + 0, 24, "Int") != 3780
+                        || NumGet(pClipDib + 0, 40 + ((31 - 10) * 64 + 10) * 4, "UInt") != 0xFF1E88E5)
+                        return false
+                } finally {
+                    DllCall("GlobalUnlock", "Ptr", hClipDib)
+                }
+            } finally {
+                try DllCall("CloseClipboard")
+            }
+            A_Clipboard := savedClip
+            clipTouched := false
+        }
+        return true
+    } finally {
+        if IsSet(clipTouched) && clipTouched
+            A_Clipboard := savedClip
+        if decoded
+            try Gdip_DisposeImage(decoded)
+        if outScaled
+            try Gdip_DisposeImage(outScaled)
+        if outOrig
+            try Gdip_DisposeImage(outOrig)
+        if src
+            try Gdip_DisposeImage(src)
+        if pStream
+            try ObjRelease(pStream)
+        if hMem
+            try DllCall("GlobalFree", "Ptr", hMem)
+        if pPen
+            try Gdip_DeletePen(pPen)
+        if bAccent
+            try Gdip_DeleteBrush(bAccent)
+        if bWhite
+            try Gdip_DeleteBrush(bWhite)
+        if gSrc
+            try Gdip_DeleteGraphics(gSrc)
         if token
             try Gdip_Shutdown(token)
     }

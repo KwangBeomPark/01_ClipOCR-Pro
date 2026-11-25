@@ -2360,48 +2360,54 @@ Gdip_TextToGraphics(pGraphics, Text, Options, Font:="Arial", Width:="", Height:=
 	Rendering := (Rendering && (Rendering[1] >= 0) && (Rendering[1] <= 5)) ? Rendering[1] : 4
 	Size := (Size && (Size[1] > 0)) ? Size[2] ? IHeight*(Size[1]/100) : Size[1] : 12
 
-	hFamily := Gdip_FontFamilyCreate(Font)
-	hFont := Gdip_FontCreate(hFamily, Size, Style)
-	FormatStyle := NoWrap ? 0x4000 | 0x1000 : 0x4000
-	hFormat := Gdip_StringFormatCreate(FormatStyle)
-	pBrush := PassBrush ? pBrush : Gdip_BrushCreateSolid(Colour)
+	hFamily := 0, hFont := 0, hFormat := 0, pBrush := PassBrush ? pBrush : 0
+	try {
+		hFamily := Gdip_FontFamilyCreate(Font)
+		hFont := hFamily ? Gdip_FontCreate(hFamily, Size, Style) : 0
+		FormatStyle := NoWrap ? 0x4000 | 0x1000 : 0x4000
+		hFormat := Gdip_StringFormatCreate(FormatStyle)
+		if !PassBrush
+			pBrush := Gdip_BrushCreateSolid(Colour)
 
-	if !(hFamily && hFont && hFormat && pBrush && pGraphics) {
-		return !pGraphics ? -2 : !hFamily ? -3 : !hFont ? -4 : !hFormat ? -5 : !pBrush ? -6 : 0
-	}
+		if !(hFamily && hFont && hFormat && pBrush && pGraphics) {
+			return !pGraphics ? -2 : !hFamily ? -3 : !hFont ? -4 : !hFormat ? -5 : !pBrush ? -6 : 0
+		}
 
-	CreateRectF(&RC:="", xpos, ypos, Width, Height)
-	Gdip_SetStringFormatAlign(hFormat, Align)
-	Gdip_SetTextRenderingHint(pGraphics, Rendering)
-	ReturnRC := Gdip_MeasureString(pGraphics, Text, hFont, hFormat, &RC)
-
-	if vPos {
-		ReturnRC := StrSplit(ReturnRC, "|")
-
-		if (vPos[0] = "vCentre") || (vPos[0] = "vCenter")
-			ypos += (Height-ReturnRC[4])//2
-		else if (vPos[0] = "Top") || (vPos[0] = "Up")
-			ypos := 0
-		else if (vPos[0] = "Bottom") || (vPos[0] = "Down")
-			ypos := Height-ReturnRC[4]
-
-		CreateRectF(&RC, xpos, ypos, Width, ReturnRC[4])
+		CreateRectF(&RC:="", xpos, ypos, Width, Height)
+		Gdip_SetStringFormatAlign(hFormat, Align)
+		Gdip_SetTextRenderingHint(pGraphics, Rendering)
 		ReturnRC := Gdip_MeasureString(pGraphics, Text, hFont, hFormat, &RC)
+
+		if vPos {
+			ReturnRC := StrSplit(ReturnRC, "|")
+			measuredH := Number(ReturnRC[4])
+
+			if (vPos[0] = "vCentre") || (vPos[0] = "vCenter")
+				ypos += (Height - measuredH) / 2
+			else if (vPos[0] = "Top") || (vPos[0] = "Up")
+				ypos := 0
+			else if (vPos[0] = "Bottom") || (vPos[0] = "Down")
+				ypos := Height - measuredH
+
+			CreateRectF(&RC, xpos, ypos, Width, measuredH)
+			ReturnRC := Gdip_MeasureString(pGraphics, Text, hFont, hFormat, &RC)
+		}
+
+		if !Measure {
+			ReturnRC := Gdip_DrawString(pGraphics, Text, hFont, hFormat, pBrush, &RC)
+		}
+
+		return ReturnRC
+	} finally {
+		if (!PassBrush && pBrush)
+			try Gdip_DeleteBrush(pBrush)
+		if hFormat
+			try Gdip_DeleteStringFormat(hFormat)
+		if hFont
+			try Gdip_DeleteFont(hFont)
+		if hFamily
+			try Gdip_DeleteFontFamily(hFamily)
 	}
-
-	if !Measure {
-		ReturnRC := Gdip_DrawString(pGraphics, Text, hFont, hFormat, pBrush, &RC)
-	}
-
-	if !PassBrush {
-		Gdip_DeleteBrush(pBrush)
-	}
-
-	Gdip_DeleteStringFormat(hFormat)
-	Gdip_DeleteFont(hFont)
-	Gdip_DeleteFontFamily(hFamily)
-
-	return ReturnRC
 }
 
 ;#####################################################################################

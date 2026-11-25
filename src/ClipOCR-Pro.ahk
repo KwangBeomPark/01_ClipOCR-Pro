@@ -7,7 +7,7 @@
 ; so --health-check and --ocr-file never terminate a running tray instance.
 #SingleInstance Off
 ;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
-;@Ahk2Exe-SetVersion 1.7.0.0
+;@Ahk2Exe-SetVersion 1.7.1.0
 ; CLI modes exit before any window or hotkey exists and must never show a dialog: this runs before
 ; the includes and globals so an error anywhere in startup ends the process with a FAIL line.
 global CLI_MODE := (A_Args.Length > 0 && (A_Args[1] == "--health-check" || A_Args[1] == "--ocr-file")) ? A_Args[1] : ""
@@ -21,7 +21,7 @@ if (CLI_MODE != "")
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
-global APP_VERSION := "1.7.0"
+global APP_VERSION := "1.7.1"
 global APP_ICON_PATH := A_IsCompiled ? A_ScriptFullPath : A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global APP_SOURCE_ICON_PATH := A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global GITHUB_RELEASES_URL := "https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases"
@@ -220,7 +220,11 @@ PrepareRapidOcrHelper() {
 
 ; ── Per-Monitor DPI Aware V2: fixes scaling mismatches across monitors ──
 ; Use physical pixels for all coordinates so capture remains accurate across mixed-DPI monitors.
-DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+EnsurePerMonitorDpiAwareness() {
+    try DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+}
+
+EnsurePerMonitorDpiAwareness()
 
 if !pToken := Gdip_Startup() {
     MsgBox "GDI+ failed to start."
@@ -607,6 +611,7 @@ ApplyCaptureHotkey() {
  * @returns {None}
  */
 ScreenClip2Win(clipToClipboard := 0) {
+    EnsurePerMonitorDpiAwareness()
     Area := SelectArea()
     if (Area.W < 10 || Area.H < 10)
         return
@@ -981,24 +986,26 @@ SafeSaveBitmapToFile(pBitmap, filePath, quality := 75) {
     }
 }
 
-SaveJpegBitmapToFile(pBitmap, filePath, quality := 85) {
-    quality := Max(0, Min(100, Integer(quality)))
+FindImageEncoder(mimeType) {
     DllCall("gdiplus\GdipGetImageEncodersSize", "UInt*", &encoderCount := 0, "UInt*", &encoderSize := 0)
     if (!encoderCount || !encoderSize)
-        return -2
+        return 0
 
     codecInfo := Buffer(encoderSize, 0)
     DllCall("gdiplus\GdipGetImageEncoders", "UInt", encoderCount, "UInt", encoderSize, "UPtr", codecInfo.Ptr)
-    pCodec := 0
     loop encoderCount {
         offset := (48 + 7 * A_PtrSize) * (A_Index - 1)
         mimePtr := NumGet(codecInfo, offset + 32 + 4 * A_PtrSize, "UPtr")
-        if (mimePtr && StrGet(mimePtr, "UTF-16") == "image/jpeg") {
-            pCodec := codecInfo.Ptr + offset
-            break
-        }
+        if (mimePtr && StrGet(mimePtr, "UTF-16") == mimeType)
+            return { buffer: codecInfo, pCodec: codecInfo.Ptr + offset }
     }
-    if !pCodec
+    return 0
+}
+
+SaveJpegBitmapToFile(pBitmap, filePath, quality := 85) {
+    quality := Max(0, Min(100, Integer(quality)))
+    encoder := FindImageEncoder("image/jpeg")
+    if !IsObject(encoder)
         return -3
 
     qualityValue := Buffer(4, 0)
@@ -1012,7 +1019,7 @@ SaveJpegBitmapToFile(pBitmap, filePath, quality := 85) {
     NumPut("UPtr", qualityValue.Ptr, encoderParams, 24 + A_PtrSize)
 
     return DllCall("gdiplus\GdipSaveImageToFile", "UPtr", pBitmap, "UPtr", StrPtr(filePath),
-        "UPtr", pCodec, "UPtr", encoderParams.Ptr)
+        "UPtr", encoder.pCodec, "UPtr", encoderParams.Ptr)
 }
 
 
@@ -1138,6 +1145,7 @@ BuildUIStringTable() {
  * @returns {None}
  */
 ScreenClip2GoogleImage() {
+    EnsurePerMonitorDpiAwareness()
     if !EnsureTranslationConsent()
         return
     Area := SelectArea()
@@ -1744,6 +1752,7 @@ ShowTextTranslationPopup(sourceText, translatedText) {
 }
 
 SelectArea() {
+    EnsurePerMonitorDpiAwareness()
     CoordMode "Mouse", "Screen"
     MouseGetPos &MX, &MY
 
@@ -1778,6 +1787,7 @@ SelectArea() {
 }
 
 DrawRectPreview(bgColor, hasBorder := true) {
+    EnsurePerMonitorDpiAwareness()
     CoordMode("Mouse", "Screen")
     MouseGetPos(&screenStartX, &screenStartY)
     options := "+AlwaysOnTop -Caption +ToolWindow +E0x20 -DPIScale" . (hasBorder ? " +Border" : "")
@@ -1800,11 +1810,17 @@ DrawRectPreview(bgColor, hasBorder := true) {
             PreviewGui.Show("x" x " y" y " w" w " h" h " NA")
     }
     PreviewGui.Destroy()
+    MouseGetPos(&sMXend, &sMYend)
+    w := Abs(screenStartX - sMXend)
+    h := Abs(screenStartY - sMYend)
+    x := (screenStartX < sMXend) ? screenStartX : sMXend
+    y := (screenStartY < sMYend) ? screenStartY : sMYend
     return { x: x, y: y, w: w, h: h }
 }
 
 ; Rubber-band preview that also preserves drag direction (start -> end) for arrows.
 DrawVectorPreview(bgColor := "Red") {
+    EnsurePerMonitorDpiAwareness()
     CoordMode("Mouse", "Screen")
     MouseGetPos(&sx, &sy)
     PreviewGui := Gui("+AlwaysOnTop -Caption +ToolWindow +E0x20 -DPIScale +Border")
@@ -1823,6 +1839,7 @@ DrawVectorPreview(bgColor := "Red") {
             PreviewGui.Show("x" x " y" y " w" w " h" h " NA")
     }
     PreviewGui.Destroy()
+    MouseGetPos(&ex, &ey)
     return { x1: sx, y1: sy, x2: ex, y2: ey }
 }
 
@@ -1836,6 +1853,7 @@ DrawVectorPreview(bgColor := "Red") {
  */
 CreateClipWin(pBitmap, x, y) {
     global WINDOW_BORDER_WIDTH, WINDOW_BORDER_COLOR, ClipWins
+    EnsurePerMonitorDpiAwareness()
     b := WINDOW_BORDER_WIDTH
     ClipGui := Gui("-Caption +ToolWindow +AlwaysOnTop +OwnDialogs -DPIScale", "ScreenClippingWindow")
     ClipGui.MarginX := 0
@@ -1887,7 +1905,7 @@ CreateClipWin(pBitmap, x, y) {
     hwnd := ClipGui.Hwnd
     ClipWins[hwnd] := { pBitmap: pBitmap, w: W, h: H, borderW: b, gui: ClipGui, IsMinimized: false, id: assignedId, NumText: NumText,
         NumBg: NumBg, closeBtn: CloseBtn,
-        picCtrl: Pic, UndoStack: [], AnnotSeq: 1, orgX: x - b, orgY: y - b }
+        picCtrl: Pic, UndoStack: [], UndoSeqStack: [], AnnotSeq: 1, bitmapRevision: 0, orgX: x - b, orgY: y - b }
 
     ; Mouse message handlers (WM_LBUTTONDOWN/DBLCLK/RBUTTONDOWN) are registered once at startup.
 
@@ -1961,17 +1979,24 @@ RestoreClipWin(hwnd, winInfo) {
 }
 
 CloseClipWin(guiObj) {
-    try hwnd := guiObj.Hwnd
-    catch
-        return
+    prevCritical := Critical("On")
+    winInfo := 0
+    try {
+        hwnd := guiObj.Hwnd
+        if ClipWins.Has(hwnd) {
+            winInfo := ClipWins[hwnd]
+            ClipWins.Delete(hwnd)
+        }
+    } catch {
+    } finally {
+        Critical(prevCritical)
+    }
 
-    if ClipWins.Has(hwnd) {
-        winInfo := ClipWins[hwnd]
+    if IsObject(winInfo) {
         try {
             for _, bmp in winInfo.UndoStack
                 try Gdip_DisposeImage(bmp)
             try Gdip_DisposeImage(winInfo.pBitmap)
-            ClipWins.Delete(hwnd)
         }
     }
     try guiObj.Destroy()
@@ -2037,7 +2062,153 @@ WM_LBUTTONDOWN(wParam, lParam, msg, hwnd) {
     PostMessage 0xA1, 2, , , "ahk_id " hwnd
 }
 
+GetControlScreenRect(ctrlHwnd, &left := 0, &top := 0, &width := 0, &height := 0) {
+    rectBuf := Buffer(16, 0)
+    if !DllCall("GetWindowRect", "Ptr", ctrlHwnd, "Ptr", rectBuf.Ptr, "Int")
+        return false
+    l := NumGet(rectBuf, 0, "Int")
+    t := NumGet(rectBuf, 4, "Int")
+    r := NumGet(rectBuf, 8, "Int")
+    b := NumGet(rectBuf, 12, "Int")
+    w := r - l
+    h := b - t
+    if (w <= 0 || h <= 0)
+        return false
+    left := l, top := t, width := w, height := h
+    return true
+}
+
+MapScreenPointToBitmap(screenX, screenY, picX, picY, picW, picH, bmpW, bmpH) {
+    if (bmpW <= 0 || bmpH <= 0)
+        return { x: 0, y: 0 }
+    scaleX := (picW > 0) ? (bmpW / picW) : 1.0
+    scaleY := (picH > 0) ? (bmpH / picH) : 1.0
+    return {
+        x: Max(0, Min(bmpW - 1, Floor((screenX - picX) * scaleX))),
+        y: Max(0, Min(bmpH - 1, Floor((screenY - picY) * scaleY)))
+    }
+}
+
+MapScreenRectToBitmap(screenX, screenY, screenW, screenH, picX, picY, picW, picH, bmpW, bmpH) {
+    if (bmpW <= 0 || bmpH <= 0 || screenW <= 0 || screenH <= 0)
+        return { x: 0, y: 0, w: 0, h: 0 }
+    scaleX := (picW > 0) ? (bmpW / picW) : 1.0
+    scaleY := (picH > 0) ? (bmpH / picH) : 1.0
+    left := Max(0, Min(bmpW, Floor((screenX - picX) * scaleX)))
+    top := Max(0, Min(bmpH, Floor((screenY - picY) * scaleY)))
+    right := Max(0, Min(bmpW, Ceil((screenX + screenW - picX) * scaleX)))
+    bottom := Max(0, Min(bmpH, Ceil((screenY + screenH - picY) * scaleY)))
+    return {
+        x: left,
+        y: top,
+        w: Max(0, right - left),
+        h: Max(0, bottom - top)
+    }
+}
+
+CommitClipBitmapUpdate(winInfo, nextBitmap, recordUndo := false, nextSeq := -1, expectedRevision := -1) {
+    global UNDO_MAX, ClipWins
+    if !nextBitmap
+        throw Error("Invalid bitmap")
+    hBitmap := Gdip_CreateHBITMAPFromBitmap(nextBitmap)
+    if !hBitmap
+        throw Error("Could not refresh image")
+    prevCritical := Critical("On")
+    try {
+        try {
+            hwnd := winInfo.gui.Hwnd
+        } catch {
+            throw Error("Clip window was closed")
+        }
+        if !ClipWins.Has(hwnd)
+            throw Error("Clip window was closed")
+        curRev := winInfo.HasProp("bitmapRevision") ? winInfo.bitmapRevision : 0
+        if (expectedRevision >= 0 && curRev != expectedRevision)
+            throw Error("Clip image changed during annotation")
+        winInfo.picCtrl.Value := "HBITMAP:*" hBitmap
+        winInfo.bitmapRevision := curRev + 1
+        if recordUndo {
+            prevBitmap := winInfo.pBitmap
+            prevSeq := winInfo.AnnotSeq
+            if !winInfo.HasProp("UndoSeqStack")
+                winInfo.UndoSeqStack := []
+            winInfo.UndoStack.Push(prevBitmap)
+            winInfo.UndoSeqStack.Push(prevSeq)
+            winInfo.pBitmap := nextBitmap
+            if (nextSeq >= 0)
+                winInfo.AnnotSeq := nextSeq
+            if (winInfo.UndoStack.Length > UNDO_MAX) {
+                oldest := winInfo.UndoStack.RemoveAt(1)
+                try Gdip_DisposeImage(oldest)
+                if (winInfo.UndoSeqStack.Length > UNDO_MAX)
+                    winInfo.UndoSeqStack.RemoveAt(1)
+            }
+        }
+    } finally {
+        DllCall("DeleteObject", "ptr", hBitmap)
+        Critical(prevCritical)
+    }
+}
+
+ApplyMosaicRegion(pGraphics, pBitmap, rx, ry, rw, rh) {
+    if (rw < 1 || rh < 1)
+        return
+    region := Gdip_CloneBitmapArea(pBitmap, rx, ry, rw, rh)
+    if !region
+        throw Error("Could not extract mosaic region")
+    small := 0, gSmall := 0, imageAttr := 0
+    try {
+        blockSize := Max(6, Min(14, Round(Min(rw, rh) / 3)))
+        smallW := Max(1, Round(rw / blockSize))
+        smallH := Max(1, Round(rh / blockSize))
+        small := Gdip_CreateBitmap(smallW, smallH)
+        if !small
+            throw Error("Could not create mosaic downsample bitmap")
+        gSmall := Gdip_GraphicsFromImage(small)
+        if !gSmall
+            throw Error("Could not prepare mosaic downsample surface")
+        status := DllCall("gdiplus\GdipCreateImageAttributes", "UPtr*", &imageAttr)
+        if (status != 0 || !imageAttr)
+            throw Error("Could not create mosaic image attributes")
+        status := DllCall("gdiplus\GdipSetImageAttributesWrapMode", "UPtr", imageAttr, "Int", 3, "UInt", 0, "Int", 0)
+        if (status != 0)
+            throw Error("Could not configure mosaic wrap mode")
+
+        Gdip_SetInterpolationMode(gSmall, 7) ; average colors while downscaling
+        DllCall("gdiplus\GdipSetPixelOffsetMode", "UPtr", gSmall, "Int", 4) ; Half
+        Gdip_SetCompositingMode(gSmall, 1) ; SourceCopy
+        status := DllCall("gdiplus\GdipDrawImageRectRect", "UPtr", gSmall, "UPtr", region,
+            "Float", 0, "Float", 0, "Float", smallW, "Float", smallH,
+            "Float", 0, "Float", 0, "Float", rw, "Float", rh,
+            "Int", 2, "UPtr", imageAttr, "UPtr", 0, "UPtr", 0)
+        if (status != 0)
+            throw Error("Mosaic downsample failed with status " status)
+        Gdip_DeleteGraphics(gSmall), gSmall := 0
+
+        Gdip_SetInterpolationMode(pGraphics, 5) ; NearestNeighbor -> blocky mosaic
+        DllCall("gdiplus\GdipSetPixelOffsetMode", "UPtr", pGraphics, "Int", 4) ; Half
+        Gdip_SetCompositingMode(pGraphics, 1) ; SourceCopy -> replace pixels cleanly
+        status := DllCall("gdiplus\GdipDrawImageRectRect", "UPtr", pGraphics, "UPtr", small,
+            "Float", rx, "Float", ry, "Float", rw, "Float", rh,
+            "Float", 0, "Float", 0, "Float", smallW, "Float", smallH,
+            "Int", 2, "UPtr", imageAttr, "UPtr", 0, "UPtr", 0)
+        if (status != 0)
+            throw Error("Mosaic render failed with status " status)
+    } finally {
+        try DllCall("gdiplus\GdipSetPixelOffsetMode", "UPtr", pGraphics, "Int", 0)
+        try Gdip_SetCompositingMode(pGraphics, 0)
+        if imageAttr
+            try Gdip_DisposeImageAttributes(imageAttr)
+        if gSmall
+            try Gdip_DeleteGraphics(gSmall)
+        if small
+            try Gdip_DisposeImage(small)
+        try Gdip_DisposeImage(region)
+    }
+}
+
 SCW_ApplyAnnotation(hwnd, mode) {
+    EnsurePerMonitorDpiAwareness()
     if !ClipWins.Has(hwnd)
         return
 
@@ -2090,97 +2261,121 @@ SCW_ApplyAnnotation(hwnd, mode) {
             return
     }
 
-    clone := 0, pGraphics := 0, pPen := 0, pBrush := 0, hBitmap := 0
+    winInfo := ClipWins.Get(hwnd, 0)
+    if (!IsObject(winInfo) || !WinExist("ahk_id " hwnd))
+        return
+    try WinGetPos(&winX, &winY, , , "ahk_id " hwnd)
+    catch
+        return
+
+    picOffsetX := winInfo.HasProp("borderW") ? winInfo.borderW : WINDOW_BORDER_WIDTH
+    picOffsetY := picOffsetX
+    try winInfo.picCtrl.GetPos(&picOffsetX, &picOffsetY)
+    ctrlOk := false
+    try ctrlOk := GetControlScreenRect(winInfo.picCtrl.Hwnd, &picX, &picY, &picW, &picH)
+    if !ctrlOk {
+        picX := winX + picOffsetX
+        picY := winY + picOffsetY
+        picW := winInfo.w
+        picH := winInfo.h
+    }
+
+    if (mode == "Text" || mode == "Number") {
+        mappedPt := MapScreenPointToBitmap(clickX, clickY, picX, picY, picW, picH, winInfo.w, winInfo.h)
+        rectX := mappedPt.x
+        rectY := mappedPt.y
+    } else if (isRectMode) {
+        mappedRect := MapScreenRectToBitmap(rect.x, rect.y, rect.w, rect.h, picX, picY, picW, picH, winInfo.w, winInfo.h)
+        if (mappedRect.w <= 0 || mappedRect.h <= 0)
+            return
+        rectX := mappedRect.x
+        rectY := mappedRect.y
+        rectW := mappedRect.w
+        rectH := mappedRect.h
+    } else if (mode == "Arrow") {
+        pt1 := MapScreenPointToBitmap(vec.x1, vec.y1, picX, picY, picW, picH, winInfo.w, winInfo.h)
+        pt2 := MapScreenPointToBitmap(vec.x2, vec.y2, picX, picY, picW, picH, winInfo.w, winInfo.h)
+        ax1 := pt1.x, ay1 := pt1.y
+        ax2 := pt2.x, ay2 := pt2.y
+    }
+
+    workBitmap := 0, pGraphics := 0, pPen := 0, pBrush := 0
+    seq := 1
+    cloneRev := 0
     try {
-        clone := Gdip_CloneBitmapArea(winInfo.pBitmap, 0, 0, winInfo.w, winInfo.h)
-        if !clone
-            throw Error("Could not create undo image")
-
-        picOffsetX := winInfo.HasProp("borderW") ? winInfo.borderW : WINDOW_BORDER_WIDTH
-        picOffsetY := picOffsetX
-        try winInfo.picCtrl.GetPos(&picOffsetX, &picOffsetY)
-
-        if (mode == "Text" || mode == "Number") {
-            rectX := clickX - (winX + picOffsetX)
-            rectY := clickY - (winY + picOffsetY)
-        } else if (isRectMode) {
-            rectX := rect.x - (winX + picOffsetX)
-            rectY := rect.y - (winY + picOffsetY)
+        prevCritical := Critical("On")
+        try {
+            winInfo := ClipWins.Get(hwnd, 0)
+            if !IsObject(winInfo)
+                return
+            seq := winInfo.AnnotSeq
+            cloneRev := winInfo.HasProp("bitmapRevision") ? winInfo.bitmapRevision : 0
+            workBitmap := Gdip_CloneBitmapArea(winInfo.pBitmap, 0, 0, winInfo.w, winInfo.h)
+        } finally {
+            Critical(prevCritical)
         }
-        ; Arrow computes its own endpoint coordinates in the drawing branch below.
+        if !workBitmap
+            throw Error("Could not create annotation working image")
 
-        pGraphics := Gdip_GraphicsFromImage(winInfo.pBitmap)
+        pGraphics := Gdip_GraphicsFromImage(workBitmap)
         if !pGraphics
             throw Error("Could not prepare drawing surface")
 
         if (mode == "Text") {
-            status := Gdip_TextToGraphics(pGraphics, textVal, "x" rectX " y" rectY " cFFFF0000 s14 Bold", "Arial", winInfo.w - rectX, winInfo.h - rectY)
-            if (status < 0)
+            status := Gdip_TextToGraphics(pGraphics, textVal, "x" rectX " y" rectY " cFFFF0000 s14 Bold", "Arial", Max(1, winInfo.w - rectX), Max(1, winInfo.h - rectY))
+            if (status != 0)
                 throw Error("Gdip_TextToGraphics failed with status " status)
         } else if (mode == "Red") {
             pPen := Gdip_CreatePen("0xFFFF0000", ANNOTATION_BORDER_WIDTH)
             if !pPen
                 throw Error("Could not create pen")
-            Gdip_DrawRectangle(pGraphics, pPen, rectX, rectY, rect.w, rect.h)
+            status := Gdip_DrawRectangle(pGraphics, pPen, rectX, rectY, rectW, rectH)
+            if (status != 0)
+                throw Error("Gdip_DrawRectangle failed with status " status)
         } else if (mode == "Yellow") {
             pBrush := Gdip_BrushCreateSolid("0x77FFFF00")
             if !pBrush
                 throw Error("Could not create brush")
-            Gdip_FillRectangle(pGraphics, pBrush, rectX, rectY, rect.w, rect.h)
+            status := Gdip_FillRectangle(pGraphics, pBrush, rectX, rectY, rectW, rectH)
+            if (status != 0)
+                throw Error("Gdip_FillRectangle failed with status " status)
         } else if (mode == "Green") {
             pBrush := Gdip_BrushCreateSolid("0x7700FF00")
             if !pBrush
                 throw Error("Could not create brush")
-            Gdip_FillRectangle(pGraphics, pBrush, rectX, rectY, rect.w, rect.h)
+            status := Gdip_FillRectangle(pGraphics, pBrush, rectX, rectY, rectW, rectH)
+            if (status != 0)
+                throw Error("Gdip_FillRectangle failed with status " status)
         } else if (mode == "Number") {
             radius := 15
             fontSize := 13
             pBrush := Gdip_BrushCreateSolid("0xFFFF0000")
             if !pBrush
                 throw Error("Could not create brush")
-            Gdip_FillEllipse(pGraphics, pBrush, rectX - radius, rectY - radius, radius * 2, radius * 2)
-            seq := winInfo.AnnotSeq
+            Gdip_SetSmoothingMode(pGraphics, 4)
+            status := Gdip_FillEllipse(pGraphics, pBrush, rectX - radius, rectY - radius, radius * 2, radius * 2)
+            Gdip_SetSmoothingMode(pGraphics, 0)
+            if (status != 0)
+                throw Error("Gdip_FillEllipse failed with status " status)
             status := Gdip_TextToGraphics(pGraphics, String(seq), "x" (rectX - radius) " y" (rectY - radius) " cFFFFFFFF s" fontSize " Bold Center vCenter", "Arial", radius * 2, radius * 2)
-            if (status < 0)
+            if (status != 0)
                 throw Error("Gdip_TextToGraphics failed with status " status)
-            winInfo.AnnotSeq := seq + 1
         } else if (mode == "Mosaic") {
             ; Clamp the region to the image bounds before pixelating.
             rx := Max(0, rectX)
             ry := Max(0, rectY)
-            rRight := Min(winInfo.w, rectX + rect.w)
-            rBottom := Min(winInfo.h, rectY + rect.h)
+            rRight := Min(winInfo.w, rectX + rectW)
+            rBottom := Min(winInfo.h, rectY + rectH)
             rw := rRight - rx
             rh := rBottom - ry
-            if (rw >= 1 && rh >= 1) {
-                region := Gdip_CloneBitmapArea(winInfo.pBitmap, rx, ry, rw, rh)
-                if region {
-                    blockSize := 10
-                    smallW := Max(1, rw // blockSize)
-                    smallH := Max(1, rh // blockSize)
-                    small := Gdip_CreateBitmap(smallW, smallH)
-                    if small {
-                        gSmall := Gdip_GraphicsFromImage(small)
-                        Gdip_SetInterpolationMode(gSmall, 7) ; average colors while downscaling
-                        Gdip_DrawImage(gSmall, region, 0, 0, smallW, smallH, 0, 0, rw, rh)
-                        Gdip_DeleteGraphics(gSmall)
-                        Gdip_SetInterpolationMode(pGraphics, 5) ; NearestNeighbor -> blocky mosaic
-                        Gdip_SetCompositingMode(pGraphics, 1)   ; SourceCopy -> replace pixels
-                        Gdip_DrawImage(pGraphics, small, rx, ry, rw, rh, 0, 0, smallW, smallH)
-                        Gdip_DisposeImage(small)
-                    }
-                    Gdip_DisposeImage(region)
-                }
-            }
+            ApplyMosaicRegion(pGraphics, workBitmap, rx, ry, rw, rh)
         } else if (mode == "Arrow") {
             pPen := Gdip_CreatePen("0xFFFF0000", ANNOTATION_BORDER_WIDTH)
             if !pPen
                 throw Error("Could not create pen")
-            ax1 := vec.x1 - (winX + picOffsetX)
-            ay1 := vec.y1 - (winY + picOffsetY)
-            ax2 := vec.x2 - (winX + picOffsetX)
-            ay2 := vec.y2 - (winY + picOffsetY)
-            Gdip_DrawLine(pGraphics, pPen, ax1, ay1, ax2, ay2)
+            status := Gdip_DrawLine(pGraphics, pPen, ax1, ay1, ax2, ay2)
+            if (status != 0)
+                throw Error("Gdip_DrawLine failed with status " status)
             ; Arrowhead: two short lines drawn back from the tip.
             adx := ax2 - ax1, ady := ay2 - ay1
             alen := Sqrt(adx * adx + ady * ady)
@@ -2190,22 +2385,19 @@ SCW_ApplyAnnotation(hwnd, mode) {
                 headW := headLen * 0.6
                 bx := ax2 - ux * headLen, by := ay2 - uy * headLen
                 perpX := -uy, perpY := ux
-                Gdip_DrawLine(pGraphics, pPen, ax2, ay2, bx + perpX * headW, by + perpY * headW)
-                Gdip_DrawLine(pGraphics, pPen, ax2, ay2, bx - perpX * headW, by - perpY * headW)
+                status := Gdip_DrawLine(pGraphics, pPen, ax2, ay2, bx + perpX * headW, by + perpY * headW)
+                if (status != 0)
+                    throw Error("Gdip_DrawLine failed with status " status)
+                status := Gdip_DrawLine(pGraphics, pPen, ax2, ay2, bx - perpX * headW, by - perpY * headW)
+                if (status != 0)
+                    throw Error("Gdip_DrawLine failed with status " status)
             }
         }
 
-        hBitmap := Gdip_CreateHBITMAPFromBitmap(winInfo.pBitmap)
-        if !hBitmap
-            throw Error("Could not refresh image")
-        winInfo.picCtrl.Value := "HBITMAP:*" hBitmap
-
-        winInfo.UndoStack.Push(clone)
-        clone := 0
-        if (winInfo.UndoStack.Length > UNDO_MAX) {
-            oldest := winInfo.UndoStack.RemoveAt(1)
-            try Gdip_DisposeImage(oldest)
-        }
+        Gdip_DeleteGraphics(pGraphics), pGraphics := 0
+        nextSeq := (mode == "Number") ? (seq + 1) : -1
+        CommitClipBitmapUpdate(winInfo, workBitmap, true, nextSeq, cloneRev)
+        workBitmap := 0
     } catch as e {
         ToolTip("⚠️ 주석 그리기 실패: " ShortErrorMessage(e.Message) "`r`n⚠️ Annotation failed.")
         SetTimer(() => ToolTip(), -2500)
@@ -2216,10 +2408,8 @@ SCW_ApplyAnnotation(hwnd, mode) {
             Gdip_DeleteBrush(pBrush)
         if pGraphics
             Gdip_DeleteGraphics(pGraphics)
-        if hBitmap
-            DllCall("DeleteObject", "ptr", hBitmap)
-        if clone
-            Gdip_DisposeImage(clone)
+        if workBitmap
+            Gdip_DisposeImage(workBitmap)
     }
 }
 
@@ -2271,6 +2461,144 @@ SCW_Win2File() {
     SaveBitmapToDesktop(ClipWins[hwnd].pBitmap)
 }
 
+EncodeBitmapToPngBuffer(pBitmap) {
+    if !pBitmap
+        return 0
+    encoder := FindImageEncoder("image/png")
+    if !IsObject(encoder)
+        return 0
+
+    pStream := 0
+    try {
+        hr := DllCall("ole32\CreateStreamOnHGlobal", "Ptr", 0, "Int", true, "Ptr*", &pStream, "Int")
+        if (hr < 0 || !pStream)
+            return 0
+        if (DllCall("gdiplus\GdipSaveImageToStream", "Ptr", pBitmap, "Ptr", pStream, "Ptr", encoder.pCodec, "Ptr", 0, "Int") != 0)
+            return 0
+        statStg := Buffer(A_PtrSize == 8 ? 80 : 72, 0)
+        ComCall(12, pStream, "Ptr", statStg.Ptr, "UInt", 1) ; IStream::Stat(..., STATFLAG_NONAME)
+        pngSize := NumGet(statStg, A_PtrSize == 8 ? 16 : 8, "UInt64")
+        if (pngSize <= 0 || pngSize > 0x7FFFFFFF)
+            return 0
+        hMem := 0
+        if (DllCall("ole32\GetHGlobalFromStream", "Ptr", pStream, "Ptr*", &hMem, "Int") < 0 || !hMem)
+            return 0
+        pSrc := DllCall("GlobalLock", "Ptr", hMem, "Ptr")
+        if !pSrc
+            return 0
+        try {
+            pngBuf := Buffer(pngSize, 0)
+            DllCall("RtlMoveMemory", "Ptr", pngBuf.Ptr, "Ptr", pSrc, "UPtr", pngSize)
+            return pngBuf
+        } finally {
+            DllCall("GlobalUnlock", "Ptr", hMem)
+        }
+    } finally {
+        if pStream
+            try ObjRelease(pStream)
+    }
+}
+
+BuildDibClipboardBuffer(pBitmap) {
+    if !pBitmap
+        return 0
+    static off1 := A_PtrSize = 8 ? 52 : 44
+    static off2 := A_PtrSize = 8 ? 32 : 24
+    hBitmap := Gdip_CreateHBITMAPFromBitmap(pBitmap)
+    if !hBitmap
+        return 0
+    try {
+        oi := Buffer(A_PtrSize = 8 ? 104 : 84, 0)
+        if !DllCall("GetObject", "Ptr", hBitmap, "Int", oi.Size, "Ptr", oi.Ptr, "Int")
+            return 0
+        imgSize := NumGet(oi, off1, "UInt")
+        bitsPtr := NumGet(oi, off2 - A_PtrSize, "Ptr")
+        if (!bitsPtr || imgSize == 0)
+            return 0
+        dibBuf := Buffer(40 + imgSize, 0)
+        DllCall("RtlMoveMemory", "Ptr", dibBuf.Ptr, "Ptr", oi.Ptr + off2, "UPtr", 40)
+        DllCall("RtlMoveMemory", "Ptr", dibBuf.Ptr + 40, "Ptr", bitsPtr, "UPtr", imgSize)
+        if (NumGet(dibBuf, 24, "Int") <= 0)
+            NumPut("Int", 3780, dibBuf, 24)
+        if (NumGet(dibBuf, 28, "Int") <= 0)
+            NumPut("Int", 3780, dibBuf, 28)
+        return dibBuf
+    } finally {
+        DllCall("DeleteObject", "Ptr", hBitmap)
+    }
+}
+
+AllocClipboardGlobalFromBuffer(buf) {
+    if (!IsObject(buf) || buf.Size <= 0)
+        return 0
+    hMem := DllCall("GlobalAlloc", "UInt", 0x0002, "UPtr", buf.Size, "Ptr") ; GMEM_MOVEABLE
+    if !hMem
+        return 0
+    pDest := DllCall("GlobalLock", "Ptr", hMem, "Ptr")
+    if !pDest {
+        DllCall("GlobalFree", "Ptr", hMem)
+        return 0
+    }
+    copied := false
+    try {
+        DllCall("RtlMoveMemory", "Ptr", pDest, "Ptr", buf.Ptr, "UPtr", buf.Size)
+        copied := true
+        return hMem
+    } catch {
+        return 0
+    } finally {
+        DllCall("GlobalUnlock", "Ptr", hMem)
+        if !copied
+            try DllCall("GlobalFree", "Ptr", hMem)
+    }
+}
+
+SetBitmapToClipboardLossless(pBitmap) {
+    hDib := 0
+    hPng := 0
+    clipOpened := false
+    try {
+        dibBuf := BuildDibClipboardBuffer(pBitmap)
+        if !IsObject(dibBuf)
+            throw Error("Could not prepare DIB clipboard data")
+        hDib := AllocClipboardGlobalFromBuffer(dibBuf)
+        if !hDib
+            throw Error("Could not allocate DIB clipboard memory")
+
+        pngFmt := 0
+        pngBuf := EncodeBitmapToPngBuffer(pBitmap)
+        if IsObject(pngBuf) {
+            pngFmt := DllCall("RegisterClipboardFormatW", "WStr", "PNG", "UInt")
+            if pngFmt
+                hPng := AllocClipboardGlobalFromBuffer(pngBuf)
+        }
+
+        loop 6 {
+            if DllCall("OpenClipboard", "Ptr", A_ScriptHwnd, "Int") {
+                clipOpened := true
+                break
+            }
+            Sleep(20)
+        }
+        if !clipOpened
+            throw Error("Could not open clipboard")
+        if !DllCall("EmptyClipboard", "Int")
+            throw Error("Could not empty clipboard")
+        if (hPng && pngFmt && DllCall("SetClipboardData", "UInt", pngFmt, "Ptr", hPng, "Ptr"))
+            hPng := 0
+        if !DllCall("SetClipboardData", "UInt", 8, "Ptr", hDib, "Ptr") ; CF_DIB = 8
+            throw Error("Could not copy image to clipboard")
+        hDib := 0
+    } finally {
+        if clipOpened
+            try DllCall("CloseClipboard")
+        if hPng
+            try DllCall("GlobalFree", "Ptr", hPng)
+        if hDib
+            try DllCall("GlobalFree", "Ptr", hDib)
+    }
+}
+
 CopyBitmapToClipboard(pBitmap, settingsSaved := true) {
     global CLIP_WIDTH, SAVE_IMAGE_FORMAT, JPG_QUALITY
     pOutput := 0
@@ -2282,7 +2610,7 @@ CopyBitmapToClipboard(pBitmap, settingsSaved := true) {
         if !pOutput
             throw Error("Could not prepare image")
 
-        Gdip_SetBitmapToClipboard(pOutput)
+        SetBitmapToClipboardLossless(pOutput)
         finalW := Gdip_GetImageWidth(pOutput)
         finalH := Gdip_GetImageHeight(pOutput)
         estimatedBytes := GetEstimatedImageSize(pOutput, SAVE_IMAGE_FORMAT, JPG_QUALITY)
@@ -3131,18 +3459,26 @@ SCW_Undo(targetHwnd := 0) {
     hwnd := targetHwnd ? targetHwnd : WinExist("A")
     if !ClipWins.Has(hwnd)
         return
-    winInfo := ClipWins[hwnd]
-    if (winInfo.UndoStack.Length > 0) {
-        popped := winInfo.UndoStack.Pop()
-        Gdip_DisposeImage(winInfo.pBitmap)
-        winInfo.pBitmap := popped
-
-        hBitmap := Gdip_CreateHBITMAPFromBitmap(winInfo.pBitmap)
-        winInfo.picCtrl.Value := "HBITMAP:*" hBitmap
-        DllCall("DeleteObject", "ptr", hBitmap)
-    } else {
-        ToolTip("⚠️ 되돌릴 작업이 없습니다.`r`n⚠️ Nothing to undo.")
-        SetTimer(() => ToolTip(), -2000)
+    prevCritical := Critical("On")
+    try {
+        if !ClipWins.Has(hwnd)
+            return
+        winInfo := ClipWins[hwnd]
+        if (winInfo.UndoStack.Length > 0) {
+            popped := winInfo.UndoStack[winInfo.UndoStack.Length]
+            CommitClipBitmapUpdate(winInfo, popped, false)
+            winInfo.UndoStack.Pop()
+            if (winInfo.HasProp("UndoSeqStack") && winInfo.UndoSeqStack.Length > 0)
+                winInfo.AnnotSeq := winInfo.UndoSeqStack.Pop()
+            oldBitmap := winInfo.pBitmap
+            winInfo.pBitmap := popped
+            try Gdip_DisposeImage(oldBitmap)
+        } else {
+            ToolTip("⚠️ 되돌릴 작업이 없습니다.`r`n⚠️ Nothing to undo.")
+            SetTimer(() => ToolTip(), -2000)
+        }
+    } finally {
+        Critical(prevCritical)
     }
 }
 
@@ -3220,6 +3556,9 @@ CreateOutputBitmap(pBitmap, targetWidth, addOutline) {
     targetWidth := NormalizeClipWidth(targetWidth)
     outputW := targetWidth == 0 ? w : targetWidth
     outputH := Max(1, Round(h * outputW / w))
+    if (outputW == w && outputH == h && !addOutline)
+        return Gdip_CloneBitmapArea(pBitmap, 0, 0, w, h)
+
     pNew := Gdip_CreateBitmap(outputW, outputH)
     if !pNew
         return 0
@@ -3230,12 +3569,14 @@ CreateOutputBitmap(pBitmap, targetWidth, addOutline) {
     }
 
     Gdip_SetInterpolationMode(pGraphics, 7) ; 7 = HighQualityBicubic
+    DllCall("gdiplus\GdipSetPixelOffsetMode", "UPtr", pGraphics, "Int", 4) ; Half
     Gdip_SetCompositingMode(pGraphics, 1) ; 1 = SourceCopy
     if DrawResizedImageWithEdgeWrap(pGraphics, pBitmap, outputW, outputH, w, h) != 0 {
         Gdip_DeleteGraphics(pGraphics)
         Gdip_DisposeImage(pNew)
         return 0
     }
+    DllCall("gdiplus\GdipSetPixelOffsetMode", "UPtr", pGraphics, "Int", 0)
 
     if addOutline {
         pPen := Gdip_CreatePen("0xFF000000", 1)
